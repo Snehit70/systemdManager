@@ -172,7 +172,22 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		switch {
+		case key.Matches(msg, keys.Quit):
+			return m, tea.Quit
+		case key.Matches(msg, keys.SwitchFocus):
+			if m.activeView == listView {
+				m.activeView = detailView
+			} else {
+				m.activeView = listView
+			}
+			return m, nil
+		case key.Matches(msg, keys.Help):
+			m.help.ShowAll = !m.help.ShowAll
+			return m, nil
+		}
 
+		if m.activeView == listView {
+			switch {
 			case key.Matches(msg, keys.Restart):
 				if selected := m.list.SelectedItem(); selected != nil {
 					unit := selected.(item).unit.Unit
@@ -196,34 +211,30 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					unit := selected.(item).unit.Unit
 					return m, m.editUnit(unit)
 				}
-			}
+			default:
+				var prevItem list.Item
+				if m.list.SelectedItem() != nil {
+					prevItem = m.list.SelectedItem()
+				}
 
-			var prevItem list.Item
-			if m.list.SelectedItem() != nil {
-				prevItem = m.list.SelectedItem()
-			}
-			
-			m.list, cmd = m.list.Update(msg)
-			cmds = append(cmds, cmd)
-			
-			if m.list.SelectedItem() != nil {
-				currItem := m.list.SelectedItem()
-				if prevItem == nil || currItem.FilterValue() != prevItem.FilterValue() {
-					unit := currItem.(item).unit.Unit
-					m.selectedUnit = unit
-					cmds = append(cmds, m.fetchLogs(unit))
+				m.list, cmd = m.list.Update(msg)
+				cmds = append(cmds, cmd)
+
+				if m.list.SelectedItem() != nil {
+					currItem := m.list.SelectedItem()
+					if prevItem == nil || currItem.FilterValue() != prevItem.FilterValue() {
+						unit := currItem.(item).unit.Unit
+						m.selectedUnit = unit
+						cmds = append(cmds, m.fetchLogs(unit))
+					}
 				}
 			}
-			
 		} else {
-
-
 			m.viewport, cmd = m.viewport.Update(msg)
 			cmds = append(cmds, cmd)
 		}
 
 	case []service.Unit:
-
 		m.units = msg
 		items := make([]list.Item, len(msg))
 		for i, unit := range msg {
@@ -275,7 +286,6 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	return m, tea.Batch(cmds...)
 }
-
 
 func (m MainModel) View() string {
 	var listStyle, detailStyle lipgloss.Style
