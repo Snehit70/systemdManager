@@ -25,6 +25,7 @@ type MainModel struct {
 	systemdClient *service.SystemdClient
 	width         int
 	height        int
+	statusMessage string
 
 	listStyle   lipgloss.Style
 	detailStyle lipgloss.Style
@@ -68,9 +69,32 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.Height = m.height - 2
 
 	case tea.KeyMsg:
+		if m.list.FilterState() == list.Filtering {
+			m.list, cmd = m.list.Update(msg)
+			return m, cmd
+		}
+
 		switch msg.String() {
 		case "ctrl+c", "q":
 			return m, tea.Quit
+		case "r":
+			if selected := m.list.SelectedItem(); selected != nil {
+				unit := selected.(item).unit.Unit
+				m.statusMessage = "Restarting " + unit + "..."
+				return m, m.restartUnit(unit)
+			}
+		case "s":
+			if selected := m.list.SelectedItem(); selected != nil {
+				unit := selected.(item).unit.Unit
+				m.statusMessage = "Starting " + unit + "..."
+				return m, m.startUnit(unit)
+			}
+		case "x":
+			if selected := m.list.SelectedItem(); selected != nil {
+				unit := selected.(item).unit.Unit
+				m.statusMessage = "Stopping " + unit + "..."
+				return m, m.stopUnit(unit)
+			}
 		}
 
 	case []service.Unit:
@@ -81,6 +105,15 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		cmd = m.list.SetItems(items)
 		cmds = append(cmds, cmd)
+		m.statusMessage = "Refreshed."
+
+	case actionResultMsg:
+		m.statusMessage = msg.message
+		if msg.err != nil {
+			m.statusMessage = "Error: " + msg.err.Error()
+		} else {
+			cmds = append(cmds, m.fetchUnits)
+		}
 	}
 
 	m.list, cmd = m.list.Update(msg)
@@ -90,8 +123,8 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if selectedItem != nil {
 		unit := selectedItem.(item).unit
 		content := fmt.Sprintf(
-			"Service: %s\nStatus: %s (%s)\nDescription: %s\n\n[Logs would go here...]",
-			unit.Unit, unit.Active, unit.Sub, unit.Description,
+			"Service: %s\nStatus: %s (%s)\nDescription: %s\n\n[Action Log]\n%s",
+			unit.Unit, unit.Active, unit.Sub, unit.Description, m.statusMessage,
 		)
 		m.viewport.SetContent(content)
 	}
@@ -116,4 +149,30 @@ func (m MainModel) fetchUnits() tea.Msg {
 		return nil
 	}
 	return units
+}
+
+type actionResultMsg struct {
+	message string
+	err     error
+}
+
+func (m MainModel) startUnit(unit string) tea.Cmd {
+	return func() tea.Msg {
+		err := m.systemdClient.StartUnit(unit)
+		return actionResultMsg{message: "Started " + unit, err: err}
+	}
+}
+
+func (m MainModel) stopUnit(unit string) tea.Cmd {
+	return func() tea.Msg {
+		err := m.systemdClient.StopUnit(unit)
+		return actionResultMsg{message: "Stopped " + unit, err: err}
+	}
+}
+
+func (m MainModel) restartUnit(unit string) tea.Cmd {
+	return func() tea.Msg {
+		err := m.systemdClient.RestartUnit(unit)
+		return actionResultMsg{message: "Restarted " + unit, err: err}
+	}
 }
