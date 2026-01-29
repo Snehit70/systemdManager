@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 )
 
@@ -37,6 +38,33 @@ func (c *SystemdClient) StopUnit(unit string) error {
 
 func (c *SystemdClient) RestartUnit(unit string) error {
 	return c.runAction("restart", unit)
+}
+
+func (c *SystemdClient) EditUnit(unit string) error {
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		editor = "vim"
+	}
+
+	cmd := exec.Command("systemctl", "--user", "edit", "--full", unit)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Env = append(os.Environ(), "SYSTEMD_EDITOR="+editor)
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to edit unit: %w", err)
+	}
+
+	return c.ReloadDaemon()
+}
+
+func (c *SystemdClient) ReloadDaemon() error {
+	cmd := exec.Command("systemctl", "--user", "daemon-reload")
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to daemon-reload: %w", err)
+	}
+	return nil
 }
 
 func (c *SystemdClient) runAction(action, unit string) error {
