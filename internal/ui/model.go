@@ -21,24 +21,25 @@ func (i item) Description() string { return i.unit.Description }
 func (i item) FilterValue() string { return i.unit.Unit }
 
 type keyMap struct {
-	Up      key.Binding
-	Down    key.Binding
-	Start   key.Binding
-	Stop    key.Binding
-	Restart key.Binding
-	Edit    key.Binding
-	Filter  key.Binding
-	Quit    key.Binding
-	Help    key.Binding
+	Up          key.Binding
+	Down        key.Binding
+	Start       key.Binding
+	Stop        key.Binding
+	Restart     key.Binding
+	Edit        key.Binding
+	Filter      key.Binding
+	SwitchFocus key.Binding
+	Quit        key.Binding
+	Help        key.Binding
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Help, k.Quit}
+	return []key.Binding{k.SwitchFocus, k.Help, k.Quit}
 }
 
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
-		{k.Up, k.Down, k.Filter},
+		{k.Up, k.Down, k.Filter, k.SwitchFocus},
 		{k.Start, k.Stop, k.Restart, k.Edit},
 		{k.Quit, k.Help},
 	}
@@ -47,11 +48,11 @@ func (k keyMap) FullHelp() [][]key.Binding {
 var keys = keyMap{
 	Up: key.NewBinding(
 		key.WithKeys("up", "k"),
-		key.WithHelp("↑/k", "move up"),
+		key.WithHelp("↑/k", "move"),
 	),
 	Down: key.NewBinding(
 		key.WithKeys("down", "j"),
-		key.WithHelp("↓/j", "move down"),
+		key.WithHelp("↓/j", "move"),
 	),
 	Start: key.NewBinding(
 		key.WithKeys("s"),
@@ -73,15 +74,24 @@ var keys = keyMap{
 		key.WithKeys("/"),
 		key.WithHelp("/", "filter"),
 	),
+	SwitchFocus: key.NewBinding(
+		key.WithKeys("tab"),
+		key.WithHelp("tab", "switch view"),
+	),
 	Quit: key.NewBinding(
 		key.WithKeys("q", "ctrl+c"),
 		key.WithHelp("q", "quit"),
 	),
 	Help: key.NewBinding(
 		key.WithKeys("?"),
-		key.WithHelp("?", "toggle help"),
+		key.WithHelp("?", "help"),
 	),
 }
+
+const (
+	listView = iota
+	detailView
+)
 
 type MainModel struct {
 	list          list.Model
@@ -93,9 +103,11 @@ type MainModel struct {
 	height        int
 	statusMessage string
 	selectedUnit  string
+	activeView    int
 
-	listStyle   lipgloss.Style
-	detailStyle lipgloss.Style
+	activeBorder   lipgloss.Style
+	inactiveBorder lipgloss.Style
+	detailStyle    lipgloss.Style
 }
 
 func NewMainModel(client *service.SystemdClient) MainModel {
@@ -106,13 +118,25 @@ func NewMainModel(client *service.SystemdClient) MainModel {
 	vp := viewport.New(0, 0)
 	vp.Style = lipgloss.NewStyle().PaddingLeft(1)
 
+	active := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("62")).
+		MarginRight(1)
+
+	inactive := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("240")).
+		MarginRight(1)
+
 	return MainModel{
-		list:          l,
-		viewport:      vp,
-		help:          help.New(),
-		systemdClient: client,
-		listStyle:     lipgloss.NewStyle().MarginRight(1).Border(lipgloss.NormalBorder(), false, true, false, false),
-		detailStyle:   lipgloss.NewStyle().PaddingLeft(1),
+		list:           l,
+		viewport:       vp,
+		help:           help.New(),
+		systemdClient:  client,
+		activeView:     listView,
+		activeBorder:   active,
+		inactiveBorder: inactive,
+		detailStyle:    lipgloss.NewStyle().PaddingLeft(1),
 	}
 }
 
@@ -129,54 +153,76 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 
-		helpHeight := 2
-		mainHeight := m.height - helpHeight - 1
+		helpHeight := 4
+		mainHeight := m.height - helpHeight
 
 		listWidth := m.width / 3
-		m.list.SetSize(listWidth, mainHeight)
 
-		detailWidth := m.width - listWidth - 2
+		m.list.SetSize(listWidth-2, mainHeight-2)
+
+		detailWidth := m.width - listWidth - 4
 		m.viewport.Width = detailWidth
-		m.viewport.Height = mainHeight
+		m.viewport.Height = mainHeight - 2
 		m.help.Width = m.width
 
 	case tea.KeyMsg:
-		if m.list.FilterState() == list.Filtering {
-			m.list, cmd = m.list.Update(msg)
-			return m, cmd
-		}
-
 		switch {
 		case key.Matches(msg, keys.Quit):
 			return m, tea.Quit
+		case key.Matches(msg, keys.SwitchFocus):
+			if m.activeView == listView {
+				m.activeView = detailView
+			} else {
+				m.activeView = listView
+			}
+			return m, nil
 		case key.Matches(msg, keys.Help):
 			m.help.ShowAll = !m.help.ShowAll
-		case key.Matches(msg, keys.Restart):
-			if selected := m.list.SelectedItem(); selected != nil {
-				unit := selected.(item).unit.Unit
-				m.statusMessage = "Restarting " + unit + "..."
-				return m, m.restartUnit(unit)
+			return m, nil
+		}
+
+		if m.activeView == listView {
+			if m.list.FilterState() == list.Filtering {
+				m.list, cmd = m.list.Update(msg)
+				return m, cmd
 			}
-		case key.Matches(msg, keys.Start):
-			if selected := m.list.SelectedItem(); selected != nil {
-				unit := selected.(item).unit.Unit
-				m.statusMessage = "Starting " + unit + "..."
-				return m, m.startUnit(unit)
+
+			switch {
+			case key.Matches(msg, keys.Restart):
+				if selected := m.list.SelectedItem(); selected != nil {
+					unit := selected.(item).unit.Unit
+					m.statusMessage = "Restarting " + unit + "..."
+					return m, m.restartUnit(unit)
+				}
+			case key.Matches(msg, keys.Start):
+				if selected := m.list.SelectedItem(); selected != nil {
+					unit := selected.(item).unit.Unit
+					m.statusMessage = "Starting " + unit + "..."
+					return m, m.startUnit(unit)
+				}
+			case key.Matches(msg, keys.Stop):
+				if selected := m.list.SelectedItem(); selected != nil {
+					unit := selected.(item).unit.Unit
+					m.statusMessage = "Stopping " + unit + "..."
+					return m, m.stopUnit(unit)
+				}
+			case key.Matches(msg, keys.Edit):
+				if selected := m.list.SelectedItem(); selected != nil {
+					unit := selected.(item).unit.Unit
+					return m, m.editUnit(unit)
+				}
 			}
-		case key.Matches(msg, keys.Stop):
-			if selected := m.list.SelectedItem(); selected != nil {
-				unit := selected.(item).unit.Unit
-				m.statusMessage = "Stopping " + unit + "..."
-				return m, m.stopUnit(unit)
-			}
-		case key.Matches(msg, keys.Edit):
-			if selected := m.list.SelectedItem(); selected != nil {
-				unit := selected.(item).unit.Unit
-				return m, m.editUnit(unit)
-			}
+
+			m.list, cmd = m.list.Update(msg)
+			cmds = append(cmds, cmd)
+
+		} else {
+			m.viewport, cmd = m.viewport.Update(msg)
+			cmds = append(cmds, cmd)
 		}
 
 	case []service.Unit:
+
 		m.units = msg
 		items := make([]list.Item, len(msg))
 		for i, unit := range msg {
@@ -226,38 +272,47 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	previousUnit := ""
-	if m.list.SelectedItem() != nil {
-		previousUnit = m.list.SelectedItem().(item).unit.Unit
+	if m.activeView == listView {
+		previousUnit := ""
+		if m.list.SelectedItem() != nil {
+			previousUnit = m.list.SelectedItem().(item).unit.Unit
+		}
+
+		currentUnit := ""
+		if m.list.SelectedItem() != nil {
+			currentUnit = m.list.SelectedItem().(item).unit.Unit
+		}
+
+		if currentUnit != "" && currentUnit != previousUnit {
+			m.selectedUnit = currentUnit
+			cmds = append(cmds, m.fetchLogs(currentUnit))
+		}
 	}
-
-	m.list, cmd = m.list.Update(msg)
-	cmds = append(cmds, cmd)
-
-	currentUnit := ""
-	if m.list.SelectedItem() != nil {
-		currentUnit = m.list.SelectedItem().(item).unit.Unit
-	}
-
-	if currentUnit != "" && currentUnit != previousUnit {
-		m.selectedUnit = currentUnit
-		cmds = append(cmds, m.fetchLogs(currentUnit))
-	}
-
-	m.viewport, cmd = m.viewport.Update(msg)
-	cmds = append(cmds, cmd)
 
 	return m, tea.Batch(cmds...)
 }
 
 func (m MainModel) View() string {
+	var listStyle, detailStyle lipgloss.Style
+
+	if m.activeView == listView {
+		listStyle = m.activeBorder
+		detailStyle = m.inactiveBorder
+	} else {
+		listStyle = m.inactiveBorder
+		detailStyle = m.activeBorder
+	}
+
 	mainView := lipgloss.JoinHorizontal(
 		lipgloss.Top,
-		m.listStyle.Render(m.list.View()),
-		m.viewport.View(),
+		listStyle.Render(m.list.View()),
+		detailStyle.Render(m.viewport.View()),
 	)
 
-	helpView := m.help.View(keys)
+	helpView := lipgloss.NewStyle().
+		PaddingTop(1).
+		PaddingLeft(1).
+		Render(m.help.View(keys))
 
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
