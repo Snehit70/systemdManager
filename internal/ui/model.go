@@ -115,6 +115,10 @@ func NewMainModel(client *service.SystemdClient) MainModel {
 	l.Title = "User Services"
 	l.SetShowHelp(false)
 
+	listKeys := list.DefaultKeyMap()
+	listKeys.Quit = key.NewBinding(key.WithKeys("ctrl+c"))
+	l.KeyMap = listKeys
+
 	vp := viewport.New(0, 0)
 	vp.Style = lipgloss.NewStyle().PaddingLeft(1)
 
