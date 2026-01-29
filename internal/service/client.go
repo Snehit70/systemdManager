@@ -26,3 +26,23 @@ func (c *SystemdClient) ListUnits() ([]Unit, error) {
 
 	return units, nil
 }
+
+func (c *SystemdClient) StartUnit(unit string) error {
+	return c.runAction("start", unit)
+}
+
+func (c *SystemdClient) StopUnit(unit string) error {
+	return c.runAction("stop", unit)
+}
+
+func (c *SystemdClient) RestartUnit(unit string) error {
+	return c.runAction("restart", unit)
+}
+
+func (c *SystemdClient) runAction(action, unit string) error {
+	cmd := exec.Command("systemctl", "--user", action, unit)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to %s %s: %w", action, unit, err)
+	}
+	return nil
+}
