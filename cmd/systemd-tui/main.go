@@ -2,19 +2,21 @@ package main
 
 import (
 	"fmt"
-	"log"
+	"os"
 	"systemd-tui/internal/service"
+	"systemd-tui/internal/ui"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func main() {
 	client := service.NewSystemdClient()
-	units, err := client.ListUnits()
-	if err != nil {
-		log.Fatalf("Error listing units: %v", err)
-	}
 
-	fmt.Printf("Found %d user services:\n", len(units))
-	for _, u := range units {
-		fmt.Printf("- %-30s [%s] %s\n", u.Unit, u.Active, u.Description)
+	m := ui.NewMainModel(client)
+	p := tea.NewProgram(m, tea.WithAltScreen())
+
+	if _, err := p.Run(); err != nil {
+		fmt.Printf("Alas, there's been an error: %v", err)
+		os.Exit(1)
 	}
 }
