@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"systemd-tui/internal/service"
+	"time"
 
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
@@ -27,6 +28,8 @@ type keyMap struct {
 	Stop        key.Binding
 	Restart     key.Binding
 	Edit        key.Binding
+	Enable      key.Binding
+	Disable     key.Binding
 	Filter      key.Binding
 	SwitchFocus key.Binding
 	Quit        key.Binding
@@ -41,6 +44,7 @@ func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.Filter, k.SwitchFocus},
 		{k.Start, k.Stop, k.Restart, k.Edit},
+		{k.Enable, k.Disable},
 		{k.Quit, k.Help},
 	}
 }
@@ -69,6 +73,14 @@ var keys = keyMap{
 	Edit: key.NewBinding(
 		key.WithKeys("e"),
 		key.WithHelp("e", "edit"),
+	),
+	Enable: key.NewBinding(
+		key.WithKeys("E"),
+		key.WithHelp("E", "enable"),
+	),
+	Disable: key.NewBinding(
+		key.WithKeys("D"),
+		key.WithHelp("D", "disable"),
 	),
 	Filter: key.NewBinding(
 		key.WithKeys("/"),
@@ -105,13 +117,16 @@ type MainModel struct {
 	selectedUnit  string
 	activeView    int
 
+	confirmingAction string
+	confirmingUnit   string
+
 	activeBorder   lipgloss.Style
 	inactiveBorder lipgloss.Style
 	detailStyle    lipgloss.Style
 }
 
 func NewMainModel(client *service.SystemdClient) MainModel {
-	l := list.New(nil, list.NewDefaultDelegate(), 0, 0)
+	l := list.New(nil, itemDelegate{}, 0, 0)
 	l.Title = "User Services"
 	l.SetShowHelp(false)
 
@@ -145,7 +160,13 @@ func NewMainModel(client *service.SystemdClient) MainModel {
 }
 
 func (m MainModel) Init() tea.Cmd {
-	return m.fetchUnits
+	return tea.Batch(m.fetchUnits, m.tick())
+}
+
+func (m MainModel) tick() tea.Cmd {
+	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+		return tickMsg(t)
+	})
 }
 
 func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -157,8 +178,9 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 
-		helpHeight := 4
-		mainHeight := m.height - helpHeight
+		helpHeight := 2
+		statusBarHeight := 1
+		mainHeight := m.height - helpHeight - statusBarHeight
 
 		listWidth := m.width / 3
 
@@ -173,6 +195,37 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.list.FilterState() == list.Filtering {
 			m.list, cmd = m.list.Update(msg)
 			return m, cmd
+		}
+
+		if m.confirmingAction != "" {
+			switch msg.String() {
+			case "y", "Y":
+				var actionCmd tea.Cmd
+				switch m.confirmingAction {
+				case "stop":
+					m.statusMessage = "Stopping " + m.confirmingUnit + "..."
+					actionCmd = m.stopUnit(m.confirmingUnit)
+				case "restart":
+					m.statusMessage = "Restarting " + m.confirmingUnit + "..."
+					actionCmd = m.restartUnit(m.confirmingUnit)
+				case "enable":
+					m.statusMessage = "Enabling " + m.confirmingUnit + "..."
+					actionCmd = m.enableUnit(m.confirmingUnit)
+				case "disable":
+					m.statusMessage = "Disabling " + m.confirmingUnit + "..."
+					actionCmd = m.disableUnit(m.confirmingUnit)
+				}
+				m.confirmingAction = ""
+				m.confirmingUnit = ""
+				return m, actionCmd
+			case "n", "N", "esc":
+				m.statusMessage = "Cancelled"
+				m.confirmingAction = ""
+				m.confirmingUnit = ""
+				return m, nil
+			default:
+				return m, nil
+			}
 		}
 
 		switch {
@@ -198,8 +251,10 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case key.Matches(msg, keys.Restart):
 				if selected := m.list.SelectedItem(); selected != nil {
 					unit := selected.(item).unit.Unit
-					m.statusMessage = "Restarting " + unit + "..."
-					return m, m.restartUnit(unit)
+					m.confirmingAction = "restart"
+					m.confirmingUnit = unit
+					m.statusMessage = fmt.Sprintf("Restart %s? (y/n)", unit)
+					return m, nil
 				}
 			case key.Matches(msg, keys.Start):
 				if selected := m.list.SelectedItem(); selected != nil {
@@ -210,13 +265,31 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case key.Matches(msg, keys.Stop):
 				if selected := m.list.SelectedItem(); selected != nil {
 					unit := selected.(item).unit.Unit
-					m.statusMessage = "Stopping " + unit + "..."
-					return m, m.stopUnit(unit)
+					m.confirmingAction = "stop"
+					m.confirmingUnit = unit
+					m.statusMessage = fmt.Sprintf("Stop %s? (y/n)", unit)
+					return m, nil
 				}
 			case key.Matches(msg, keys.Edit):
 				if selected := m.list.SelectedItem(); selected != nil {
 					unit := selected.(item).unit.Unit
 					return m, m.editUnit(unit)
+				}
+			case key.Matches(msg, keys.Enable):
+				if selected := m.list.SelectedItem(); selected != nil {
+					unit := selected.(item).unit.Unit
+					m.confirmingAction = "enable"
+					m.confirmingUnit = unit
+					m.statusMessage = fmt.Sprintf("Enable %s? (y/n)", unit)
+					return m, nil
+				}
+			case key.Matches(msg, keys.Disable):
+				if selected := m.list.SelectedItem(); selected != nil {
+					unit := selected.(item).unit.Unit
+					m.confirmingAction = "disable"
+					m.confirmingUnit = unit
+					m.statusMessage = fmt.Sprintf("Disable %s? (y/n)", unit)
+					return m, nil
 				}
 			default:
 				var prevItem list.Item
@@ -282,13 +355,27 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			selectedItem := m.list.SelectedItem()
 			if selectedItem != nil {
 				unit := selectedItem.(item).unit
-				content := fmt.Sprintf(
-					"Service: %s\nStatus: %s (%s)\nDescription: %s\n\n[Last 50 Lines of Log]\n%s",
-					unit.Unit, unit.Active, unit.Sub, unit.Description, msg.logs,
-				)
+				var content string
+				if msg.err != nil {
+					content = fmt.Sprintf(
+						"Service: %s\nStatus: %s (%s)\nDescription: %s\n\n[Log Error]\n%s",
+						unit.Unit, unit.Active, unit.Sub, unit.Description, msg.err.Error(),
+					)
+				} else {
+					content = fmt.Sprintf(
+						"Service: %s\nStatus: %s (%s)\nDescription: %s\n\n[Last 50 Lines of Log]\n%s",
+						unit.Unit, unit.Active, unit.Sub, unit.Description, msg.logs,
+					)
+				}
 				m.viewport.SetContent(content)
 			}
 		}
+
+	case errMsg:
+		m.statusMessage = fmt.Sprintf("%s: %s", msg.context, msg.err.Error())
+
+	case tickMsg:
+		return m, tea.Batch(m.fetchUnits, m.tick())
 	}
 
 	return m, tea.Batch(cmds...)
@@ -311,14 +398,22 @@ func (m MainModel) View() string {
 		detailStyle.Render(m.viewport.View()),
 	)
 
+	statusBar := ""
+	if m.statusMessage != "" {
+		statusStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("241")).
+			PaddingLeft(1)
+		statusBar = statusStyle.Render(m.statusMessage)
+	}
+
 	helpView := lipgloss.NewStyle().
-		PaddingTop(1).
 		PaddingLeft(1).
 		Render(m.help.View(keys))
 
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
 		mainView,
+		statusBar,
 		helpView,
 	)
 }
@@ -326,10 +421,17 @@ func (m MainModel) View() string {
 func (m MainModel) fetchUnits() tea.Msg {
 	units, err := m.systemdClient.ListUnits()
 	if err != nil {
-		return nil
+		return errMsg{context: "Failed to list units", err: err}
 	}
 	return units
 }
+
+type errMsg struct {
+	context string
+	err     error
+}
+
+func (e errMsg) Error() string { return e.err.Error() }
 
 type actionResultMsg struct {
 	message string
@@ -345,6 +447,8 @@ type logMsg struct {
 	logs string
 	err  error
 }
+
+type tickMsg time.Time
 
 func (m MainModel) fetchLogs(unit string) tea.Cmd {
 	return func() tea.Msg {
@@ -371,6 +475,20 @@ func (m MainModel) restartUnit(unit string) tea.Cmd {
 	return func() tea.Msg {
 		err := m.systemdClient.RestartUnit(unit)
 		return actionResultMsg{message: "Restarted " + unit, err: err}
+	}
+}
+
+func (m MainModel) enableUnit(unit string) tea.Cmd {
+	return func() tea.Msg {
+		err := m.systemdClient.EnableUnit(unit)
+		return actionResultMsg{message: "Enabled " + unit, err: err}
+	}
+}
+
+func (m MainModel) disableUnit(unit string) tea.Cmd {
+	return func() tea.Msg {
+		err := m.systemdClient.DisableUnit(unit)
+		return actionResultMsg{message: "Disabled " + unit, err: err}
 	}
 }
 
