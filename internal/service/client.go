@@ -40,6 +40,14 @@ func (c *SystemdClient) RestartUnit(unit string) error {
 	return c.runAction("restart", unit)
 }
 
+func (c *SystemdClient) EnableUnit(unit string) error {
+	return c.runAction("enable", unit)
+}
+
+func (c *SystemdClient) DisableUnit(unit string) error {
+	return c.runAction("disable", unit)
+}
+
 func (c *SystemdClient) EditCmd(unit string) *exec.Cmd {
 	editor := os.Getenv("EDITOR")
 	if editor == "" {
