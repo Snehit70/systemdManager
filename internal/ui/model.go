@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"systemd-tui/internal/service"
 
+	"github.com/charmbracelet/bubbles/help"
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -18,9 +20,73 @@ func (i item) Title() string       { return i.unit.Unit }
 func (i item) Description() string { return i.unit.Description }
 func (i item) FilterValue() string { return i.unit.Unit }
 
+type keyMap struct {
+	Up      key.Binding
+	Down    key.Binding
+	Start   key.Binding
+	Stop    key.Binding
+	Restart key.Binding
+	Edit    key.Binding
+	Filter  key.Binding
+	Quit    key.Binding
+	Help    key.Binding
+}
+
+func (k keyMap) ShortHelp() []key.Binding {
+	return []key.Binding{k.Help, k.Quit}
+}
+
+func (k keyMap) FullHelp() [][]key.Binding {
+	return [][]key.Binding{
+		{k.Up, k.Down, k.Filter},
+		{k.Start, k.Stop, k.Restart, k.Edit},
+		{k.Quit, k.Help},
+	}
+}
+
+var keys = keyMap{
+	Up: key.NewBinding(
+		key.WithKeys("up", "k"),
+		key.WithHelp("↑/k", "move up"),
+	),
+	Down: key.NewBinding(
+		key.WithKeys("down", "j"),
+		key.WithHelp("↓/j", "move down"),
+	),
+	Start: key.NewBinding(
+		key.WithKeys("s"),
+		key.WithHelp("s", "start"),
+	),
+	Stop: key.NewBinding(
+		key.WithKeys("x"),
+		key.WithHelp("x", "stop"),
+	),
+	Restart: key.NewBinding(
+		key.WithKeys("r"),
+		key.WithHelp("r", "restart"),
+	),
+	Edit: key.NewBinding(
+		key.WithKeys("e"),
+		key.WithHelp("e", "edit"),
+	),
+	Filter: key.NewBinding(
+		key.WithKeys("/"),
+		key.WithHelp("/", "filter"),
+	),
+	Quit: key.NewBinding(
+		key.WithKeys("q", "ctrl+c"),
+		key.WithHelp("q", "quit"),
+	),
+	Help: key.NewBinding(
+		key.WithKeys("?"),
+		key.WithHelp("?", "toggle help"),
+	),
+}
+
 type MainModel struct {
 	list          list.Model
 	viewport      viewport.Model
+	help          help.Model
 	units         []service.Unit
 	systemdClient *service.SystemdClient
 	width         int
@@ -43,6 +109,7 @@ func NewMainModel(client *service.SystemdClient) MainModel {
 	return MainModel{
 		list:          l,
 		viewport:      vp,
+		help:          help.New(),
 		systemdClient: client,
 		listStyle:     lipgloss.NewStyle().MarginRight(1).Border(lipgloss.NormalBorder(), false, true, false, false),
 		detailStyle:   lipgloss.NewStyle().PaddingLeft(1),
@@ -62,12 +129,16 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 
+		helpHeight := 2
+		mainHeight := m.height - helpHeight - 1
+
 		listWidth := m.width / 3
-		m.list.SetSize(listWidth, m.height-2)
+		m.list.SetSize(listWidth, mainHeight)
 
 		detailWidth := m.width - listWidth - 2
 		m.viewport.Width = detailWidth
-		m.viewport.Height = m.height - 2
+		m.viewport.Height = mainHeight
+		m.help.Width = m.width
 
 	case tea.KeyMsg:
 		if m.list.FilterState() == list.Filtering {
@@ -75,28 +146,30 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 
-		switch msg.String() {
-		case "ctrl+c", "q":
+		switch {
+		case key.Matches(msg, keys.Quit):
 			return m, tea.Quit
-		case "r":
+		case key.Matches(msg, keys.Help):
+			m.help.ShowAll = !m.help.ShowAll
+		case key.Matches(msg, keys.Restart):
 			if selected := m.list.SelectedItem(); selected != nil {
 				unit := selected.(item).unit.Unit
 				m.statusMessage = "Restarting " + unit + "..."
 				return m, m.restartUnit(unit)
 			}
-		case "s":
+		case key.Matches(msg, keys.Start):
 			if selected := m.list.SelectedItem(); selected != nil {
 				unit := selected.(item).unit.Unit
 				m.statusMessage = "Starting " + unit + "..."
 				return m, m.startUnit(unit)
 			}
-		case "x":
+		case key.Matches(msg, keys.Stop):
 			if selected := m.list.SelectedItem(); selected != nil {
 				unit := selected.(item).unit.Unit
 				m.statusMessage = "Stopping " + unit + "..."
 				return m, m.stopUnit(unit)
 			}
-		case "e":
+		case key.Matches(msg, keys.Edit):
 			if selected := m.list.SelectedItem(); selected != nil {
 				unit := selected.(item).unit.Unit
 				return m, m.editUnit(unit)
@@ -178,10 +251,18 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m MainModel) View() string {
-	return lipgloss.JoinHorizontal(
+	mainView := lipgloss.JoinHorizontal(
 		lipgloss.Top,
 		m.listStyle.Render(m.list.View()),
 		m.viewport.View(),
+	)
+
+	helpView := m.help.View(keys)
+
+	return lipgloss.JoinVertical(
+		lipgloss.Left,
+		mainView,
+		helpView,
 	)
 }
 
