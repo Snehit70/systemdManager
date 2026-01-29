@@ -40,7 +40,7 @@ func (c *SystemdClient) RestartUnit(unit string) error {
 	return c.runAction("restart", unit)
 }
 
-func (c *SystemdClient) EditUnit(unit string) error {
+func (c *SystemdClient) EditCmd(unit string) *exec.Cmd {
 	editor := os.Getenv("EDITOR")
 	if editor == "" {
 		editor = "vim"
@@ -52,11 +52,7 @@ func (c *SystemdClient) EditUnit(unit string) error {
 	cmd.Stderr = os.Stderr
 	cmd.Env = append(os.Environ(), "SYSTEMD_EDITOR="+editor)
 
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to edit unit: %w", err)
-	}
-
-	return c.ReloadDaemon()
+	return cmd
 }
 
 func (c *SystemdClient) ReloadDaemon() error {
@@ -65,6 +61,15 @@ func (c *SystemdClient) ReloadDaemon() error {
 		return fmt.Errorf("failed to daemon-reload: %w", err)
 	}
 	return nil
+}
+
+func (c *SystemdClient) GetLogs(unit string) (string, error) {
+	cmd := exec.Command("journalctl", "--user", "-u", unit, "-n", "50", "--no-pager")
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to get logs: %w", err)
+	}
+	return string(output), nil
 }
 
 func (c *SystemdClient) runAction(action, unit string) error {
