@@ -26,6 +26,7 @@ type MainModel struct {
 	width         int
 	height        int
 	statusMessage string
+	selectedUnit  string
 
 	listStyle   lipgloss.Style
 	detailStyle lipgloss.Style
@@ -112,6 +113,11 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, cmd)
 		m.statusMessage = "Refreshed."
 
+		if m.list.SelectedItem() != nil {
+			unit := m.list.SelectedItem().(item).unit.Unit
+			cmds = append(cmds, m.fetchLogs(unit))
+		}
+
 	case actionResultMsg:
 		m.statusMessage = msg.message
 		if msg.err != nil {
@@ -132,19 +138,37 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, tea.Batch(cmds...)
+
+	case logMsg:
+		if msg.unit == m.selectedUnit {
+			selectedItem := m.list.SelectedItem()
+			if selectedItem != nil {
+				unit := selectedItem.(item).unit
+				content := fmt.Sprintf(
+					"Service: %s\nStatus: %s (%s)\nDescription: %s\n\n[Last 50 Lines of Log]\n%s",
+					unit.Unit, unit.Active, unit.Sub, unit.Description, msg.logs,
+				)
+				m.viewport.SetContent(content)
+			}
+		}
+	}
+
+	previousUnit := ""
+	if m.list.SelectedItem() != nil {
+		previousUnit = m.list.SelectedItem().(item).unit.Unit
 	}
 
 	m.list, cmd = m.list.Update(msg)
 	cmds = append(cmds, cmd)
 
-	selectedItem := m.list.SelectedItem()
-	if selectedItem != nil {
-		unit := selectedItem.(item).unit
-		content := fmt.Sprintf(
-			"Service: %s\nStatus: %s (%s)\nDescription: %s\n\n[Action Log]\n%s",
-			unit.Unit, unit.Active, unit.Sub, unit.Description, m.statusMessage,
-		)
-		m.viewport.SetContent(content)
+	currentUnit := ""
+	if m.list.SelectedItem() != nil {
+		currentUnit = m.list.SelectedItem().(item).unit.Unit
+	}
+
+	if currentUnit != "" && currentUnit != previousUnit {
+		m.selectedUnit = currentUnit
+		cmds = append(cmds, m.fetchLogs(currentUnit))
 	}
 
 	m.viewport, cmd = m.viewport.Update(msg)
@@ -176,6 +200,19 @@ type actionResultMsg struct {
 
 type editorFinishedMsg struct {
 	err error
+}
+
+type logMsg struct {
+	unit string
+	logs string
+	err  error
+}
+
+func (m MainModel) fetchLogs(unit string) tea.Cmd {
+	return func() tea.Msg {
+		logs, err := m.systemdClient.GetLogs(unit)
+		return logMsg{unit: unit, logs: logs, err: err}
+	}
 }
 
 func (m MainModel) startUnit(unit string) tea.Cmd {
