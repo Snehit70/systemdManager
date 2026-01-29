@@ -188,6 +188,9 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if m.activeView == listView {
 			switch {
+			case key.Matches(msg, keys.Filter):
+				m.list, cmd = m.list.Update(msg)
+				return m, cmd
 			case key.Matches(msg, keys.Restart):
 				if selected := m.list.SelectedItem(); selected != nil {
 					unit := selected.(item).unit.Unit
