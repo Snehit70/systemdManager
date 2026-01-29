@@ -95,6 +95,11 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.statusMessage = "Stopping " + unit + "..."
 				return m, m.stopUnit(unit)
 			}
+		case "e":
+			if selected := m.list.SelectedItem(); selected != nil {
+				unit := selected.(item).unit.Unit
+				return m, m.editUnit(unit)
+			}
 		}
 
 	case []service.Unit:
@@ -114,6 +119,19 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			cmds = append(cmds, m.fetchUnits)
 		}
+
+	case editorFinishedMsg:
+		if msg.err != nil {
+			m.statusMessage = "Edit failed: " + msg.err.Error()
+		} else {
+			if err := m.systemdClient.ReloadDaemon(); err != nil {
+				m.statusMessage = "Edit saved, but reload failed: " + err.Error()
+			} else {
+				m.statusMessage = "Edit saved. Reloaded daemon."
+				cmds = append(cmds, m.fetchUnits)
+			}
+		}
+		return m, tea.Batch(cmds...)
 	}
 
 	m.list, cmd = m.list.Update(msg)
@@ -156,6 +174,10 @@ type actionResultMsg struct {
 	err     error
 }
 
+type editorFinishedMsg struct {
+	err error
+}
+
 func (m MainModel) startUnit(unit string) tea.Cmd {
 	return func() tea.Msg {
 		err := m.systemdClient.StartUnit(unit)
@@ -175,4 +197,13 @@ func (m MainModel) restartUnit(unit string) tea.Cmd {
 		err := m.systemdClient.RestartUnit(unit)
 		return actionResultMsg{message: "Restarted " + unit, err: err}
 	}
+}
+
+func (m MainModel) editUnit(unit string) tea.Cmd {
+	return tea.ExecProcess(
+		m.systemdClient.EditCmd(unit),
+		func(err error) tea.Msg {
+			return editorFinishedMsg{err: err}
+		},
+	)
 }
