@@ -63,34 +63,34 @@ A terminal user interface (TUI) for managing `systemd --user` services on a pers
 
 ## 5. Improvement Roadmap
 
-### Phase 5: Bug Fixes (Priority: High)
+### Phase 5: Bug Fixes (Priority: High) - COMPLETE
 | Task | Description | Status |
 |------|-------------|--------|
-| 5.1 | Fix `fetchUnits()` returning `nil` on error - return `errMsg` instead | Pending |
-| 5.2 | Add `errMsg` type for proper error handling pattern | Pending |
-| 5.3 | Display `statusMessage` in View - add status bar | Pending |
-| 5.4 | Handle `logMsg.err` - show error when log fetch fails | Pending |
+| 5.1 | Fix `fetchUnits()` returning `nil` on error - return `errMsg` instead | Complete |
+| 5.2 | Add `errMsg` type for proper error handling pattern | Complete |
+| 5.3 | Display `statusMessage` in View - add status bar | Complete |
+| 5.4 | Handle `logMsg.err` - show error when log fetch fails | Complete |
 
-### Phase 6: Status Color Indicators (Priority: Medium)
+### Phase 6: Status Color Indicators (Priority: Medium) - COMPLETE
 | Task | Description | Status |
 |------|-------------|--------|
-| 6.1 | Create `styles.go` with centralized Lip Gloss styles | Pending |
-| 6.2 | Define status colors: Green=active, Red=failed, Gray=inactive | Pending |
-| 6.3 | Implement custom list delegate for colored service names | Pending |
+| 6.1 | Create `styles.go` with centralized Lip Gloss styles | Complete |
+| 6.2 | Define status colors: Green=active, Red=failed, Gray=inactive | Complete |
+| 6.3 | Implement custom list delegate for colored service names | Complete |
 
-### Phase 7: Missing Features (Priority: Medium)
+### Phase 7: Missing Features (Priority: Medium) - COMPLETE
 | Task | Description | Status |
 |------|-------------|--------|
-| 7.1 | Add `EnableUnit()` / `DisableUnit()` to SystemdClient | Pending |
-| 7.2 | Add `E`/`D` keybindings for enable/disable | Pending |
-| 7.3 | Add polling with `tea.Tick` (2s interval) | Pending |
-| 7.4 | Add confirmation prompts for stop/restart/enable/disable | Pending |
+| 7.1 | Add `EnableUnit()` / `DisableUnit()` to SystemdClient | Complete |
+| 7.2 | Add `E`/`D` keybindings for enable/disable | Complete |
+| 7.3 | Add polling with `tea.Tick` (2s interval) | Complete |
+| 7.4 | Add confirmation prompts for stop/restart/enable/disable | Complete |
 
-### Phase 8: Testing (Priority: Medium)
+### Phase 8: Testing (Priority: Medium) - PARTIAL
 | Task | Description | Status |
 |------|-------------|--------|
-| 8.1 | Add unit tests for `SystemdClient` (mock JSON parsing) | Pending |
-| 8.2 | Add unit tests for `MainModel` (message handling) | Pending |
+| 8.1 | Add unit tests for `SystemdClient` (mock JSON parsing) | Complete |
+| 8.2 | Add unit tests for `MainModel` (message handling) | Complete |
 | 8.3 | Add golden file tests for View output | Pending |
 
 ### Phase 9: Extras (Priority: Low)
@@ -139,7 +139,8 @@ systemdManager/
 ├── go.mod
 ├── go.sum
 ├── .golangci.yml               # Linter configuration
-└── AGENTS.md                   # This file
+├── AGENTS.md                   # This file
+└── TESTING.md                  # Manual testing guide
 ```
 
 ## 8. Edge Cases

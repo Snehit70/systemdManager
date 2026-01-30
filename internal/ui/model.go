@@ -129,6 +129,8 @@ func NewMainModel(client *service.SystemdClient) MainModel {
 	l := list.New(nil, itemDelegate{}, 0, 0)
 	l.Title = "User Services"
 	l.SetShowHelp(false)
+	l.SetShowFilter(false)
+	l.SetShowStatusBar(false)
 
 	listKeys := list.DefaultKeyMap()
 	listKeys.Quit = key.NewBinding(key.WithKeys("ctrl+c"))
@@ -178,9 +180,10 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 
-		helpHeight := 2
+		filterBarHeight := 1
+		helpHeight := 3
 		statusBarHeight := 1
-		mainHeight := m.height - helpHeight - statusBarHeight
+		mainHeight := m.height - filterBarHeight - helpHeight - statusBarHeight
 
 		listWidth := m.width / 3
 
@@ -190,6 +193,10 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.Width = detailWidth
 		m.viewport.Height = mainHeight - 2
 		m.help.Width = m.width
+
+	case list.FilterMatchesMsg:
+		m.list, cmd = m.list.Update(msg)
+		return m, cmd
 
 	case tea.KeyMsg:
 		if m.list.FilterState() == list.Filtering {
@@ -245,9 +252,6 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if m.activeView == listView {
 			switch {
-			case key.Matches(msg, keys.Filter):
-				m.list, cmd = m.list.Update(msg)
-				return m, cmd
 			case key.Matches(msg, keys.Restart):
 				if selected := m.list.SelectedItem(); selected != nil {
 					unit := selected.(item).unit.Unit
@@ -375,6 +379,10 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusMessage = fmt.Sprintf("%s: %s", msg.context, msg.err.Error())
 
 	case tickMsg:
+		// Don't refresh while filtering - it would reset the filter
+		if m.list.FilterState() == list.Filtering {
+			return m, m.tick()
+		}
 		return m, tea.Batch(m.fetchUnits, m.tick())
 	}
 
@@ -398,21 +406,35 @@ func (m MainModel) View() string {
 		detailStyle.Render(m.viewport.View()),
 	)
 
+	fullWidth := lipgloss.Width(mainView)
+
 	statusBar := ""
 	if m.statusMessage != "" {
 		statusStyle := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("241")).
-			PaddingLeft(1)
+			PaddingLeft(1).
+			Width(fullWidth)
 		statusBar = statusStyle.Render(m.statusMessage)
 	}
 
-	helpView := lipgloss.NewStyle().
+	filterBar := ""
+	if m.list.FilterState() == list.Filtering {
+		filterStyle := lipgloss.NewStyle().
+			PaddingLeft(1).
+			Width(fullWidth)
+		filterBar = filterStyle.Render(m.list.FilterInput.View())
+	}
+
+	helpStyle := lipgloss.NewStyle().
 		PaddingLeft(1).
-		Render(m.help.View(keys))
+		Width(fullWidth).
+		Background(lipgloss.Color("235"))
+	helpView := helpStyle.Render(m.help.View(keys))
 
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
 		mainView,
+		filterBar,
 		statusBar,
 		helpView,
 	)
