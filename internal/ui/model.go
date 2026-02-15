@@ -55,6 +55,38 @@ func (k keyMap) FullHelp() [][]key.Binding {
 	}
 }
 
+func renderHelpBar(k keyMap, width int, theme config.ThemeColors) string {
+	keyStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.BorderActive)).
+		Bold(true)
+	descStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.TextMuted))
+	sepStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.Border))
+
+	bindings := []key.Binding{
+		k.Up, k.Start, k.Enable, k.ToggleFollow, k.Quit,
+		k.Down, k.Stop, k.Disable, k.ToggleGroup, k.Help,
+		k.Filter, k.Restart, k.Edit, k.SwitchFocus,
+	}
+
+	var parts []string
+	for _, b := range bindings {
+		help := b.Help()
+		part := keyStyle.Render(help.Key) + " " + descStyle.Render(help.Desc)
+		parts = append(parts, part)
+	}
+
+	sep := sepStyle.Render(" • ")
+	line := strings.Join(parts, sep)
+
+	return lipgloss.NewStyle().
+		Width(width).
+		PaddingLeft(1).
+		Background(lipgloss.Color(theme.Surface)).
+		Render(line)
+}
+
 var keys = keyMap{
 	Up: key.NewBinding(
 		key.WithKeys("up", "k"),
@@ -234,17 +266,15 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 
-		filterBarHeight := 1
-		helpHeight := 3
+		helpHeight := 2
 		statusBarHeight := 1
-		mainHeight := m.height - filterBarHeight - helpHeight - statusBarHeight
+		mainHeight := m.height - helpHeight - statusBarHeight
 
 		listWidth := m.width / 3
+		detailWidth := m.width - listWidth - 4
 
 		m.list.SetSize(listWidth-2, mainHeight-2)
-
-		detailWidth := m.width - listWidth - 4
-		m.viewport.Width = detailWidth
+		m.viewport.Width = detailWidth - 2
 		m.viewport.Height = mainHeight - 2
 		m.help.Width = m.width
 
@@ -321,7 +351,19 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, keys.ToggleGroup):
 			m.groupMode = m.groupMode.Next()
 			m.statusMessage = fmt.Sprintf("Group by: %s", m.groupMode)
-			cmds = append(cmds, m.updateListItems())
+			var items []list.Item
+			switch m.groupMode {
+			case groupByStatus:
+				items = m.groupedByStatus()
+			case groupByLoad:
+				items = m.groupedByLoad()
+			default:
+				for _, svc := range m.services {
+					items = append(items, item{svc: svc})
+				}
+			}
+			cmd = m.list.SetItems(items)
+			cmds = append(cmds, cmd)
 		}
 
 		if m.activeView == listView {
@@ -394,7 +436,21 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case []client.Service:
 		m.services = msg
-		cmds = append(cmds, m.updateListItems())
+		m.statusMessage = fmt.Sprintf("Loaded %d services", len(msg))
+
+		var items []list.Item
+		switch m.groupMode {
+		case groupByStatus:
+			items = m.groupedByStatus()
+		case groupByLoad:
+			items = m.groupedByLoad()
+		default:
+			for _, svc := range m.services {
+				items = append(items, item{svc: svc})
+			}
+		}
+		cmd = m.list.SetItems(items)
+		cmds = append(cmds, cmd)
 
 		if m.list.SelectedItem() != nil {
 			svc := m.list.SelectedItem().(item).svc
@@ -468,7 +524,7 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case errMsg:
-		m.statusMessage = fmt.Sprintf("%s: %s", msg.context, msg.err.Error())
+		m.statusMessage = fmt.Sprintf("Error: %s - %s", msg.context, msg.err.Error())
 
 	case tickMsg:
 		// Don't refresh while filtering - it would reset the filter
@@ -492,13 +548,19 @@ func (m MainModel) View() string {
 		detailStyle = m.activeBorder
 	}
 
+	listView := listStyle.Render(m.list.View())
+	detailView := detailStyle.Render(m.viewport.View())
+
 	mainView := lipgloss.JoinHorizontal(
 		lipgloss.Top,
-		listStyle.Render(m.list.View()),
-		detailStyle.Render(m.viewport.View()),
+		listView,
+		detailView,
 	)
 
-	fullWidth := lipgloss.Width(mainView)
+	fullWidth := m.width
+	if fullWidth < 1 {
+		fullWidth = lipgloss.Width(mainView)
+	}
 
 	statusBar := ""
 	if m.statusMessage != "" {
@@ -517,12 +579,7 @@ func (m MainModel) View() string {
 		filterBar = filterStyle.Render(m.list.FilterInput.View())
 	}
 
-	helpStyle := lipgloss.NewStyle().
-		PaddingLeft(1).
-		Width(fullWidth).
-		Background(lipgloss.Color(m.theme.Surface)).
-		Foreground(lipgloss.Color(m.theme.Text))
-	helpView := helpStyle.Render(m.help.View(keys))
+	helpView := renderHelpBar(keys, fullWidth, m.theme)
 
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
