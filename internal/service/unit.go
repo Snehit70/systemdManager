@@ -7,3 +7,9 @@ type Unit struct {
 	Sub         string `json:"sub"`
 	Description string `json:"description"`
 }
+
+type UnitFile struct {
+	UnitFile string  `json:"unit_file"`
+	State    string  `json:"state"`
+	Preset   *string `json:"preset"`
+}

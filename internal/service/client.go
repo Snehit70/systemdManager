@@ -7,14 +7,15 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"systemd-tui/internal/client"
 )
 
-// systemdClient implements ServiceClient for systemd user services
 type systemdClient struct {
-	editor string
+	editor        string
+	userConfigDir string
 }
 
 func NewSystemdClient(cfg interface{ GetEditor() string }) client.ServiceClient {
@@ -22,10 +23,33 @@ func NewSystemdClient(cfg interface{ GetEditor() string }) client.ServiceClient 
 	if cfg != nil {
 		editor = cfg.GetEditor()
 	}
-	return &systemdClient{editor: editor}
+	userConfigDir, _ := os.UserConfigDir()
+	return &systemdClient{editor: editor, userConfigDir: userConfigDir}
 }
 
 func (c *systemdClient) ListServices() ([]client.Service, error) {
+	units, err := c.listUnits()
+	if err != nil {
+		return nil, err
+	}
+
+	unitFileStates := make(map[string]string)
+	unitFiles, err := c.listUnitFiles()
+	if err == nil {
+		for _, uf := range unitFiles {
+			unitFileStates[uf.UnitFile] = uf.State
+		}
+	}
+
+	services := make([]client.Service, len(units))
+	for i, u := range units {
+		services[i] = c.unitToService(u, unitFileStates[u.Unit])
+	}
+
+	return services, nil
+}
+
+func (c *systemdClient) listUnits() ([]Unit, error) {
 	cmd := exec.Command("systemctl", "--user", "list-units", "--type=service", "--all", "--output=json")
 	output, err := cmd.Output()
 	if err != nil {
@@ -37,12 +61,22 @@ func (c *systemdClient) ListServices() ([]client.Service, error) {
 		return nil, fmt.Errorf("failed to parse systemctl output: %w", err)
 	}
 
-	services := make([]client.Service, len(units))
-	for i, u := range units {
-		services[i] = c.unitToService(u)
+	return units, nil
+}
+
+func (c *systemdClient) listUnitFiles() ([]UnitFile, error) {
+	cmd := exec.Command("systemctl", "--user", "list-unit-files", "--type=service", "--output=json")
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("failed to run systemctl list-unit-files: %w", err)
 	}
 
-	return services, nil
+	var unitFiles []UnitFile
+	if err := json.Unmarshal(output, &unitFiles); err != nil {
+		return nil, fmt.Errorf("failed to parse systemctl output: %w", err)
+	}
+
+	return unitFiles, nil
 }
 
 func (c *systemdClient) StartService(name string) error {
@@ -170,8 +204,10 @@ func (c *systemdClient) runAction(action, unit string) error {
 	return nil
 }
 
-func (c *systemdClient) unitToService(u Unit) client.Service {
+func (c *systemdClient) unitToService(u Unit, state string) client.Service {
 	enabled := u.Load == "loaded" && (u.Active == "active" || strings.Contains(u.Sub, "enabled"))
+	source := c.determineSource(u.Unit, state)
+
 	return client.Service{
 		Name:        u.Unit,
 		Description: u.Description,
@@ -179,5 +215,153 @@ func (c *systemdClient) unitToService(u Unit) client.Service {
 		Sub:         u.Sub,
 		Enabled:     enabled,
 		Load:        u.Load,
+		Source:      source,
 	}
+}
+
+func (c *systemdClient) determineSource(unitName, state string) client.ServiceSource {
+	if c.userConfigDir != "" {
+		userServicePath := filepath.Join(c.userConfigDir, "systemd", "user", unitName)
+		if _, err := os.Stat(userServicePath); err == nil {
+			return client.SourceUser
+		}
+	}
+
+	switch state {
+	case "generated":
+		return client.SourceGenerated
+	case "transient":
+		return client.SourceTransient
+	case "static", "alias":
+		return client.SourceStatic
+	case "enabled", "disabled":
+		return client.SourceSystem
+	default:
+		return client.SourceUnknown
+	}
+}
+
+func (c *systemdClient) CreateService(tmpl client.ServiceTemplate) error {
+	// Validate and sanitize service name
+	tmpl.Name = c.sanitizeServiceName(tmpl.Name)
+	if tmpl.Name == "" {
+		return fmt.Errorf("invalid service name")
+	}
+
+	if c.userConfigDir == "" {
+		return fmt.Errorf("cannot determine user config directory")
+	}
+
+	serviceDir := filepath.Join(c.userConfigDir, "systemd", "user")
+	if err := os.MkdirAll(serviceDir, 0755); err != nil {
+		return fmt.Errorf("failed to create service directory: %w", err)
+	}
+
+	servicePath := filepath.Join(serviceDir, tmpl.Name)
+
+	// Sanitize template fields
+	if err := c.sanitizeTemplate(&tmpl); err != nil {
+		return fmt.Errorf("invalid template: %w", err)
+	}
+
+	content := c.generateServiceFile(tmpl)
+
+	// Use atomic file creation with O_EXCL to prevent race conditions
+	file, err := os.OpenFile(servicePath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+	if err != nil {
+		if os.IsExist(err) {
+			return fmt.Errorf("service %s already exists", tmpl.Name)
+		}
+		return fmt.Errorf("failed to create service file: %w", err)
+	}
+	defer file.Close()
+
+	if _, err := file.WriteString(content); err != nil {
+		return fmt.Errorf("failed to write service file: %w", err)
+	}
+
+	return c.ReloadDaemon()
+}
+
+func (c *systemdClient) generateServiceFile(tmpl client.ServiceTemplate) string {
+	var sb strings.Builder
+
+	sb.WriteString("[Unit]\n")
+	sb.WriteString(fmt.Sprintf("Description=%s\n", tmpl.Description))
+	sb.WriteString("After=network.target\n\n")
+
+	sb.WriteString("[Service]\n")
+	sb.WriteString(fmt.Sprintf("Type=%s\n", c.serviceType(tmpl.Type)))
+	sb.WriteString(fmt.Sprintf("ExecStart=%s\n", tmpl.ExecStart))
+
+	if tmpl.WorkingDirectory != "" {
+		sb.WriteString(fmt.Sprintf("WorkingDirectory=%s\n", tmpl.WorkingDirectory))
+	}
+
+	sb.WriteString(fmt.Sprintf("Restart=%s\n", c.restartPolicy(tmpl.Restart)))
+	sb.WriteString("RestartSec=5\n\n")
+
+	sb.WriteString("[Install]\n")
+	sb.WriteString("WantedBy=default.target\n")
+
+	return sb.String()
+}
+
+func (c *systemdClient) serviceType(t string) string {
+	switch t {
+	case "oneshot", "forking", "notify", "dbus":
+		return t
+	default:
+		return "simple"
+	}
+}
+
+func (c *systemdClient) restartPolicy(r string) string {
+	switch r {
+	case "always", "on-success", "on-failure", "on-abnormal", "on-abort", "on-watchdog":
+		return r
+	case "no":
+		return "no"
+	default:
+		return "on-failure"
+	}
+}
+
+func (c *systemdClient) sanitizeServiceName(name string) string {
+	name = filepath.Base(name)
+	if strings.Contains(name, "..") {
+		return ""
+	}
+
+	if !strings.HasSuffix(name, ".service") {
+		name += ".service"
+	}
+
+	return name
+}
+
+func (c *systemdClient) sanitizeTemplate(tmpl *client.ServiceTemplate) error {
+	if strings.ContainsAny(tmpl.Description, "\n\r") {
+		return fmt.Errorf("description contains newlines")
+	}
+	if strings.ContainsAny(tmpl.ExecStart, "\n\r") {
+		return fmt.Errorf("exec start contains newlines")
+	}
+	if strings.ContainsAny(tmpl.WorkingDirectory, "\n\r") {
+		return fmt.Errorf("working directory contains newlines")
+	}
+	if strings.ContainsAny(tmpl.Type, "\n\r") {
+		return fmt.Errorf("type contains newlines")
+	}
+	if strings.ContainsAny(tmpl.Restart, "\n\r") {
+		return fmt.Errorf("restart contains newlines")
+	}
+
+	tmpl.Description = strings.TrimSpace(tmpl.Description)
+	tmpl.ExecStart = strings.TrimSpace(tmpl.ExecStart)
+	tmpl.WorkingDirectory = strings.TrimSpace(tmpl.WorkingDirectory)
+	tmpl.Type = strings.TrimSpace(tmpl.Type)
+	tmpl.Restart = strings.TrimSpace(tmpl.Restart)
+
+	return nil
 }

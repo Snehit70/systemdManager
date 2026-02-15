@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 
+	"systemd-tui/internal/client"
+
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -30,12 +32,13 @@ func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list
 	}
 
 	statusStyle := GetStatusStyle(string(i.svc.Status))
+	sourceIndicator := sourceIndicator(i.svc.Source)
 
 	var str string
 	if index == m.Index() {
-		str = SelectedStyle.Render("> " + statusStyle.Render(i.svc.Name))
+		str = SelectedStyle.Render("> " + sourceIndicator + " " + statusStyle.Render(i.svc.Name))
 	} else {
-		str = "  " + statusStyle.Render(i.svc.Name)
+		str = "  " + sourceIndicator + " " + statusStyle.Render(i.svc.Name)
 	}
 
 	desc := i.svc.Description
@@ -51,4 +54,15 @@ func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list
 	str += "\n  " + descStyle.Render(desc)
 
 	fmt.Fprint(w, str)
+}
+
+func sourceIndicator(source client.ServiceSource) string {
+	switch source {
+	case client.SourceUser:
+		return "●"
+	case client.SourceSystem, client.SourceGenerated, client.SourceTransient, client.SourceStatic:
+		return "○"
+	default:
+		return "·"
+	}
 }
