@@ -668,70 +668,34 @@ func (m MainModel) View() string {
 	return baseView
 }
 
+func (m MainModel) renderModalLabel(label string, index int) string {
+	if m.createModal.focusIndex == index {
+		return lipgloss.NewStyle().
+			Foreground(lipgloss.Color(m.theme.BorderActive)).
+			Bold(true).
+			Render(label)
+	}
+	return lipgloss.NewStyle().
+		Foreground(lipgloss.Color(m.theme.Text)).
+		Bold(true).
+		Render(label)
+}
+
 func (m MainModel) renderCreateModal(baseView string) string {
 	modalWidth := 60
 	modalHeight := 18
 
-	labelStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(m.theme.Text)).
-		Bold(true)
-
 	inputStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(m.theme.TextMuted))
 
-	focusStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(m.theme.BorderActive)).
-		Bold(true)
-
 	var inputs []string
 
-	nameLabel := "Name:"
-	if m.createModal.focusIndex == 0 {
-		nameLabel = focusStyle.Render("Name:")
-	} else {
-		nameLabel = labelStyle.Render("Name:")
-	}
-	inputs = append(inputs, fmt.Sprintf("%s %s", nameLabel, m.createModal.nameInput.View()))
-
-	execLabel := "Command:"
-	if m.createModal.focusIndex == 1 {
-		execLabel = focusStyle.Render("Command:")
-	} else {
-		execLabel = labelStyle.Render("Command:")
-	}
-	inputs = append(inputs, fmt.Sprintf("%s %s", execLabel, m.createModal.execInput.View()))
-
-	descLabel := "Description:"
-	if m.createModal.focusIndex == 2 {
-		descLabel = focusStyle.Render("Description:")
-	} else {
-		descLabel = labelStyle.Render("Description:")
-	}
-	inputs = append(inputs, fmt.Sprintf("%s %s", descLabel, m.createModal.descInput.View()))
-
-	workdirLabel := "Workdir:"
-	if m.createModal.focusIndex == 3 {
-		workdirLabel = focusStyle.Render("Workdir:")
-	} else {
-		workdirLabel = labelStyle.Render("Workdir:")
-	}
-	inputs = append(inputs, fmt.Sprintf("%s %s", workdirLabel, m.createModal.workdirInput.View()))
-
-	typeLabel := "Type:"
-	if m.createModal.focusIndex == 4 {
-		typeLabel = focusStyle.Render("Type:")
-	} else {
-		typeLabel = labelStyle.Render("Type:")
-	}
-	inputs = append(inputs, fmt.Sprintf("%s %s", typeLabel, inputStyle.Render(m.createModal.serviceType+" (t to toggle)")))
-
-	restartLabel := "Restart:"
-	if m.createModal.focusIndex == 5 {
-		restartLabel = focusStyle.Render("Restart:")
-	} else {
-		restartLabel = labelStyle.Render("Restart:")
-	}
-	inputs = append(inputs, fmt.Sprintf("%s %s", restartLabel, inputStyle.Render(m.createModal.restart+" (r to cycle)")))
+	inputs = append(inputs, fmt.Sprintf("%s %s", m.renderModalLabel("Name:", 0), m.createModal.nameInput.View()))
+	inputs = append(inputs, fmt.Sprintf("%s %s", m.renderModalLabel("Command:", 1), m.createModal.execInput.View()))
+	inputs = append(inputs, fmt.Sprintf("%s %s", m.renderModalLabel("Description:", 2), m.createModal.descInput.View()))
+	inputs = append(inputs, fmt.Sprintf("%s %s", m.renderModalLabel("Workdir:", 3), m.createModal.workdirInput.View()))
+	inputs = append(inputs, fmt.Sprintf("%s %s", m.renderModalLabel("Type:", 4), inputStyle.Render(m.createModal.serviceType+" (t to toggle)")))
+	inputs = append(inputs, fmt.Sprintf("%s %s", m.renderModalLabel("Restart:", 5), inputStyle.Render(m.createModal.restart+" (r to cycle)")))
 
 	content := lipgloss.NewStyle().
 		Width(modalWidth).

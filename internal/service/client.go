@@ -33,14 +33,12 @@ func (c *systemdClient) ListServices() ([]client.Service, error) {
 		return nil, err
 	}
 
-	unitFiles, err := c.listUnitFiles()
-	if err != nil {
-		return nil, err
-	}
-
 	unitFileStates := make(map[string]string)
-	for _, uf := range unitFiles {
-		unitFileStates[uf.UnitFile] = uf.State
+	unitFiles, err := c.listUnitFiles()
+	if err == nil {
+		for _, uf := range unitFiles {
+			unitFileStates[uf.UnitFile] = uf.State
+		}
 	}
 
 	services := make([]client.Service, len(units))
@@ -331,7 +329,7 @@ func (c *systemdClient) restartPolicy(r string) string {
 
 func (c *systemdClient) sanitizeServiceName(name string) string {
 	name = filepath.Base(name)
-	if strings.ContainsAny(name, "/\\") || strings.Contains(name, "..") {
+	if strings.Contains(name, "..") {
 		return ""
 	}
 
