@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 type itemDelegate struct{}
@@ -15,6 +16,14 @@ func (d itemDelegate) Spacing() int                            { return 1 }
 func (d itemDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd { return nil }
 
 func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list.Item) {
+	if header, ok := listItem.(groupHeaderItem); ok {
+		headerStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("241")).
+			Bold(true)
+		fmt.Fprint(w, headerStyle.Render(header.title))
+		return
+	}
+
 	i, ok := listItem.(item)
 	if !ok {
 		return

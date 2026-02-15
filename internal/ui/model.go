@@ -37,6 +37,7 @@ type keyMap struct {
 	Filter       key.Binding
 	SwitchFocus  key.Binding
 	ToggleFollow key.Binding
+	ToggleGroup  key.Binding
 	Quit         key.Binding
 	Help         key.Binding
 }
@@ -49,7 +50,7 @@ func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.Filter, k.SwitchFocus},
 		{k.Start, k.Stop, k.Restart, k.Edit},
-		{k.Enable, k.Disable, k.ToggleFollow},
+		{k.Enable, k.Disable, k.ToggleFollow, k.ToggleGroup},
 		{k.Quit, k.Help},
 	}
 }
@@ -99,6 +100,10 @@ var keys = keyMap{
 		key.WithKeys("f"),
 		key.WithHelp("f", "follow logs"),
 	),
+	ToggleGroup: key.NewBinding(
+		key.WithKeys("g"),
+		key.WithHelp("g", "group by status"),
+	),
 	Quit: key.NewBinding(
 		key.WithKeys("q", "ctrl+c"),
 		key.WithHelp("q", "quit"),
@@ -113,6 +118,29 @@ const (
 	listView = iota
 	detailView
 )
+
+type groupMode int
+
+const (
+	groupNone groupMode = iota
+	groupByStatus
+	groupByLoad
+)
+
+func (g groupMode) String() string {
+	switch g {
+	case groupByStatus:
+		return "status"
+	case groupByLoad:
+		return "load"
+	default:
+		return "none"
+	}
+}
+
+func (g groupMode) Next() groupMode {
+	return (g + 1) % 3
+}
 
 type MainModel struct {
 	list          list.Model
@@ -134,6 +162,8 @@ type MainModel struct {
 	following      bool
 	followCancel   context.CancelFunc
 	followLogLines []string
+
+	groupMode groupMode
 
 	activeBorder   lipgloss.Style
 	inactiveBorder lipgloss.Style
@@ -288,6 +318,10 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			return m, nil
+		case key.Matches(msg, keys.ToggleGroup):
+			m.groupMode = m.groupMode.Next()
+			m.statusMessage = fmt.Sprintf("Group by: %s", m.groupMode)
+			cmds = append(cmds, m.updateListItems())
 		}
 
 		if m.activeView == listView {
@@ -360,13 +394,7 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case []client.Service:
 		m.services = msg
-		items := make([]list.Item, len(msg))
-		for i, svc := range msg {
-			items[i] = item{svc: svc}
-		}
-		cmd = m.list.SetItems(items)
-		cmds = append(cmds, cmd)
-		m.statusMessage = "Refreshed."
+		cmds = append(cmds, m.updateListItems())
 
 		if m.list.SelectedItem() != nil {
 			svc := m.list.SelectedItem().(item).svc
@@ -629,4 +657,95 @@ func (m *MainModel) stopFollow() {
 	m.following = false
 	m.followCancel = nil
 	m.followLogLines = nil
+}
+
+func (m MainModel) updateListItems() tea.Cmd {
+	var items []list.Item
+
+	switch m.groupMode {
+	case groupByStatus:
+		items = m.groupedByStatus()
+	case groupByLoad:
+		items = m.groupedByLoad()
+	default:
+		for _, svc := range m.services {
+			items = append(items, item{svc: svc})
+		}
+	}
+
+	return m.list.SetItems(items)
+}
+
+type groupHeaderItem struct {
+	title string
+}
+
+func (g groupHeaderItem) Title() string       { return g.title }
+func (g groupHeaderItem) Description() string { return "" }
+func (g groupHeaderItem) FilterValue() string { return "" }
+
+func (m MainModel) groupedByStatus() []list.Item {
+	active := make([]list.Item, 0)
+	failed := make([]list.Item, 0)
+	inactive := make([]list.Item, 0)
+
+	for _, svc := range m.services {
+		switch svc.Status {
+		case client.StatusActive:
+			active = append(active, item{svc: svc})
+		case client.StatusFailed:
+			failed = append(failed, item{svc: svc})
+		default:
+			inactive = append(inactive, item{svc: svc})
+		}
+	}
+
+	var items []list.Item
+	if len(active) > 0 {
+		items = append(items, groupHeaderItem{title: "── Active ──"})
+		items = append(items, active...)
+	}
+	if len(failed) > 0 {
+		items = append(items, groupHeaderItem{title: "── Failed ──"})
+		items = append(items, failed...)
+	}
+	if len(inactive) > 0 {
+		items = append(items, groupHeaderItem{title: "── Inactive ──"})
+		items = append(items, inactive...)
+	}
+
+	return items
+}
+
+func (m MainModel) groupedByLoad() []list.Item {
+	loaded := make([]list.Item, 0)
+	notFound := make([]list.Item, 0)
+	other := make([]list.Item, 0)
+
+	for _, svc := range m.services {
+		switch svc.Load {
+		case "loaded":
+			loaded = append(loaded, item{svc: svc})
+		case "not-found":
+			notFound = append(notFound, item{svc: svc})
+		default:
+			other = append(other, item{svc: svc})
+		}
+	}
+
+	var items []list.Item
+	if len(loaded) > 0 {
+		items = append(items, groupHeaderItem{title: "── Loaded ──"})
+		items = append(items, loaded...)
+	}
+	if len(notFound) > 0 {
+		items = append(items, groupHeaderItem{title: "── Not Found ──"})
+		items = append(items, notFound...)
+	}
+	if len(other) > 0 {
+		items = append(items, groupHeaderItem{title: "── Other ──"})
+		items = append(items, other...)
+	}
+
+	return items
 }
