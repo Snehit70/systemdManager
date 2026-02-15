@@ -98,7 +98,7 @@ A terminal user interface (TUI) for managing `systemd --user` services on a pers
 ### Phase 9: Extras (Priority: Low)
 | Task | Description | Status |
 |------|-------------|--------|
-| 9.1 | Service grouping by load state | Pending |
+| 9.1 | Service grouping by load state | Complete |
 | 9.2 | Copy to clipboard (unit name, logs) | Pending |
 | 9.3 | Config file support (`~/.config/systemd-tui/config.yaml`) | Complete |
 | 9.4 | Status view toggle (logs vs full `systemctl status`) | Pending |
@@ -119,6 +119,7 @@ A terminal user interface (TUI) for managing `systemd --user` services on a pers
 | `E` | Enable service (with confirmation) | List view |
 | `D` | Disable service (with confirmation) | List view |
 | `f` | Toggle follow mode (live log tailing) | Global |
+| `g` | Toggle grouping (none/status/load) | Global |
 | `R` | Refresh service list | Global |
 | `?` | Toggle help | Global |
 | `q` | Quit | Global |
