@@ -21,26 +21,26 @@ func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list
 		return
 	}
 
-	statusStyle := GetStatusStyle(i.unit.Active)
+	statusStyle := GetStatusStyle(string(i.svc.Status))
 
 	var str string
 	if index == m.Index() {
 		selectedStyle := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("170")).
 			Bold(true)
-		str = selectedStyle.Render("> " + statusStyle.Render(i.unit.Unit))
+		str = selectedStyle.Render("> " + statusStyle.Render(i.svc.Name))
 	} else {
-		str = "  " + statusStyle.Render(i.unit.Unit)
+		str = "  " + statusStyle.Render(i.svc.Name)
 	}
 
-	desc := i.unit.Description
+	desc := i.svc.Description
 	if len(desc) > 50 {
 		desc = desc[:47] + "..."
 	}
 	descStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("241"))
 
-	if i.unit.Active == "failed" {
+	if i.svc.Status == "failed" {
 		descStyle = descStyle.Foreground(lipgloss.Color("203"))
 	}
 

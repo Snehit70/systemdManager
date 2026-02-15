@@ -2,8 +2,9 @@ package ui
 
 import (
 	"fmt"
-	"systemd-tui/internal/service"
 	"time"
+
+	"systemd-tui/internal/client"
 
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
@@ -14,12 +15,12 @@ import (
 )
 
 type item struct {
-	unit service.Unit
+	svc client.Service
 }
 
-func (i item) Title() string       { return i.unit.Unit }
-func (i item) Description() string { return i.unit.Description }
-func (i item) FilterValue() string { return i.unit.Unit }
+func (i item) Title() string       { return i.svc.Name }
+func (i item) Description() string { return i.svc.Description }
+func (i item) FilterValue() string { return i.svc.Name }
 
 type keyMap struct {
 	Up          key.Binding
@@ -109,12 +110,12 @@ type MainModel struct {
 	list          list.Model
 	viewport      viewport.Model
 	help          help.Model
-	units         []service.Unit
-	systemdClient *service.SystemdClient
+	services      []client.Service
+	client        client.ServiceClient
 	width         int
 	height        int
 	statusMessage string
-	selectedUnit  string
+	selectedSvc   string
 	activeView    int
 
 	confirmingAction string
@@ -125,7 +126,7 @@ type MainModel struct {
 	detailStyle    lipgloss.Style
 }
 
-func NewMainModel(client *service.SystemdClient) MainModel {
+func NewMainModel(client client.ServiceClient) MainModel {
 	l := list.New(nil, itemDelegate{}, 0, 0)
 	l.Title = "User Services"
 	l.SetShowHelp(false)
@@ -153,7 +154,7 @@ func NewMainModel(client *service.SystemdClient) MainModel {
 		list:           l,
 		viewport:       vp,
 		help:           help.New(),
-		systemdClient:  client,
+		client:         client,
 		activeView:     listView,
 		activeBorder:   active,
 		inactiveBorder: inactive,
@@ -162,7 +163,7 @@ func NewMainModel(client *service.SystemdClient) MainModel {
 }
 
 func (m MainModel) Init() tea.Cmd {
-	return tea.Batch(m.fetchUnits, m.tick())
+	return tea.Batch(m.fetchServices, m.tick())
 }
 
 func (m MainModel) tick() tea.Cmd {
@@ -211,16 +212,16 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				switch m.confirmingAction {
 				case "stop":
 					m.statusMessage = "Stopping " + m.confirmingUnit + "..."
-					actionCmd = m.stopUnit(m.confirmingUnit)
+					actionCmd = m.stopService(m.confirmingUnit)
 				case "restart":
 					m.statusMessage = "Restarting " + m.confirmingUnit + "..."
-					actionCmd = m.restartUnit(m.confirmingUnit)
+					actionCmd = m.restartService(m.confirmingUnit)
 				case "enable":
 					m.statusMessage = "Enabling " + m.confirmingUnit + "..."
-					actionCmd = m.enableUnit(m.confirmingUnit)
+					actionCmd = m.enableService(m.confirmingUnit)
 				case "disable":
 					m.statusMessage = "Disabling " + m.confirmingUnit + "..."
-					actionCmd = m.disableUnit(m.confirmingUnit)
+					actionCmd = m.disableService(m.confirmingUnit)
 				}
 				m.confirmingAction = ""
 				m.confirmingUnit = ""
@@ -254,45 +255,45 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch {
 			case key.Matches(msg, keys.Restart):
 				if selected := m.list.SelectedItem(); selected != nil {
-					unit := selected.(item).unit.Unit
+					svc := selected.(item).svc
 					m.confirmingAction = "restart"
-					m.confirmingUnit = unit
-					m.statusMessage = fmt.Sprintf("Restart %s? (y/n)", unit)
+					m.confirmingUnit = svc.Name
+					m.statusMessage = fmt.Sprintf("Restart %s? (y/n)", svc.Name)
 					return m, nil
 				}
 			case key.Matches(msg, keys.Start):
 				if selected := m.list.SelectedItem(); selected != nil {
-					unit := selected.(item).unit.Unit
-					m.statusMessage = "Starting " + unit + "..."
-					return m, m.startUnit(unit)
+					svc := selected.(item).svc
+					m.statusMessage = "Starting " + svc.Name + "..."
+					return m, m.startService(svc.Name)
 				}
 			case key.Matches(msg, keys.Stop):
 				if selected := m.list.SelectedItem(); selected != nil {
-					unit := selected.(item).unit.Unit
+					svc := selected.(item).svc
 					m.confirmingAction = "stop"
-					m.confirmingUnit = unit
-					m.statusMessage = fmt.Sprintf("Stop %s? (y/n)", unit)
+					m.confirmingUnit = svc.Name
+					m.statusMessage = fmt.Sprintf("Stop %s? (y/n)", svc.Name)
 					return m, nil
 				}
 			case key.Matches(msg, keys.Edit):
 				if selected := m.list.SelectedItem(); selected != nil {
-					unit := selected.(item).unit.Unit
-					return m, m.editUnit(unit)
+					svc := selected.(item).svc
+					return m, m.editService(svc.Name)
 				}
 			case key.Matches(msg, keys.Enable):
 				if selected := m.list.SelectedItem(); selected != nil {
-					unit := selected.(item).unit.Unit
+					svc := selected.(item).svc
 					m.confirmingAction = "enable"
-					m.confirmingUnit = unit
-					m.statusMessage = fmt.Sprintf("Enable %s? (y/n)", unit)
+					m.confirmingUnit = svc.Name
+					m.statusMessage = fmt.Sprintf("Enable %s? (y/n)", svc.Name)
 					return m, nil
 				}
 			case key.Matches(msg, keys.Disable):
 				if selected := m.list.SelectedItem(); selected != nil {
-					unit := selected.(item).unit.Unit
+					svc := selected.(item).svc
 					m.confirmingAction = "disable"
-					m.confirmingUnit = unit
-					m.statusMessage = fmt.Sprintf("Disable %s? (y/n)", unit)
+					m.confirmingUnit = svc.Name
+					m.statusMessage = fmt.Sprintf("Disable %s? (y/n)", svc.Name)
 					return m, nil
 				}
 			default:
@@ -307,9 +308,9 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.list.SelectedItem() != nil {
 					currItem := m.list.SelectedItem()
 					if prevItem == nil || currItem.FilterValue() != prevItem.FilterValue() {
-						unit := currItem.(item).unit.Unit
-						m.selectedUnit = unit
-						cmds = append(cmds, m.fetchLogs(unit))
+						svc := currItem.(item).svc
+						m.selectedSvc = svc.Name
+						cmds = append(cmds, m.fetchLogs(svc.Name))
 					}
 				}
 			}
@@ -318,19 +319,19 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, cmd)
 		}
 
-	case []service.Unit:
-		m.units = msg
+	case []client.Service:
+		m.services = msg
 		items := make([]list.Item, len(msg))
-		for i, unit := range msg {
-			items[i] = item{unit: unit}
+		for i, svc := range msg {
+			items[i] = item{svc: svc}
 		}
 		cmd = m.list.SetItems(items)
 		cmds = append(cmds, cmd)
 		m.statusMessage = "Refreshed."
 
 		if m.list.SelectedItem() != nil {
-			unit := m.list.SelectedItem().(item).unit.Unit
-			cmds = append(cmds, m.fetchLogs(unit))
+			svc := m.list.SelectedItem().(item).svc
+			cmds = append(cmds, m.fetchLogs(svc.Name))
 		}
 
 	case actionResultMsg:
@@ -338,37 +339,37 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.statusMessage = "Error: " + msg.err.Error()
 		} else {
-			cmds = append(cmds, m.fetchUnits)
+			cmds = append(cmds, m.fetchServices)
 		}
 
 	case editorFinishedMsg:
 		if msg.err != nil {
 			m.statusMessage = "Edit failed: " + msg.err.Error()
 		} else {
-			if err := m.systemdClient.ReloadDaemon(); err != nil {
+			if err := m.client.ReloadDaemon(); err != nil {
 				m.statusMessage = "Edit saved, but reload failed: " + err.Error()
 			} else {
 				m.statusMessage = "Edit saved. Reloaded daemon."
-				cmds = append(cmds, m.fetchUnits)
+				cmds = append(cmds, m.fetchServices)
 			}
 		}
 		return m, tea.Batch(cmds...)
 
 	case logMsg:
-		if msg.unit == m.selectedUnit {
+		if msg.unit == m.selectedSvc {
 			selectedItem := m.list.SelectedItem()
 			if selectedItem != nil {
-				unit := selectedItem.(item).unit
+				svc := selectedItem.(item).svc
 				var content string
 				if msg.err != nil {
 					content = fmt.Sprintf(
 						"Service: %s\nStatus: %s (%s)\nDescription: %s\n\n[Log Error]\n%s",
-						unit.Unit, unit.Active, unit.Sub, unit.Description, msg.err.Error(),
+						svc.Name, svc.Status, svc.Sub, svc.Description, msg.err.Error(),
 					)
 				} else {
 					content = fmt.Sprintf(
 						"Service: %s\nStatus: %s (%s)\nDescription: %s\n\n[Last 50 Lines of Log]\n%s",
-						unit.Unit, unit.Active, unit.Sub, unit.Description, msg.logs,
+						svc.Name, svc.Status, svc.Sub, svc.Description, msg.logs,
 					)
 				}
 				m.viewport.SetContent(content)
@@ -383,7 +384,7 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.list.FilterState() == list.Filtering {
 			return m, m.tick()
 		}
-		return m, tea.Batch(m.fetchUnits, m.tick())
+		return m, tea.Batch(m.fetchServices, m.tick())
 	}
 
 	return m, tea.Batch(cmds...)
@@ -440,12 +441,12 @@ func (m MainModel) View() string {
 	)
 }
 
-func (m MainModel) fetchUnits() tea.Msg {
-	units, err := m.systemdClient.ListUnits()
+func (m MainModel) fetchServices() tea.Msg {
+	services, err := m.client.ListServices()
 	if err != nil {
-		return errMsg{context: "Failed to list units", err: err}
+		return errMsg{context: "Failed to list services", err: err}
 	}
-	return units
+	return services
 }
 
 type errMsg struct {
@@ -474,49 +475,55 @@ type tickMsg time.Time
 
 func (m MainModel) fetchLogs(unit string) tea.Cmd {
 	return func() tea.Msg {
-		logs, err := m.systemdClient.GetLogs(unit)
+		logs, err := m.client.GetLogs(unit, client.LogOptions{Lines: 50})
 		return logMsg{unit: unit, logs: logs, err: err}
 	}
 }
 
-func (m MainModel) startUnit(unit string) tea.Cmd {
+func (m MainModel) startService(unit string) tea.Cmd {
 	return func() tea.Msg {
-		err := m.systemdClient.StartUnit(unit)
+		err := m.client.StartService(unit)
 		return actionResultMsg{message: "Started " + unit, err: err}
 	}
 }
 
-func (m MainModel) stopUnit(unit string) tea.Cmd {
+func (m MainModel) stopService(unit string) tea.Cmd {
 	return func() tea.Msg {
-		err := m.systemdClient.StopUnit(unit)
+		err := m.client.StopService(unit)
 		return actionResultMsg{message: "Stopped " + unit, err: err}
 	}
 }
 
-func (m MainModel) restartUnit(unit string) tea.Cmd {
+func (m MainModel) restartService(unit string) tea.Cmd {
 	return func() tea.Msg {
-		err := m.systemdClient.RestartUnit(unit)
+		err := m.client.RestartService(unit)
 		return actionResultMsg{message: "Restarted " + unit, err: err}
 	}
 }
 
-func (m MainModel) enableUnit(unit string) tea.Cmd {
+func (m MainModel) enableService(unit string) tea.Cmd {
 	return func() tea.Msg {
-		err := m.systemdClient.EnableUnit(unit)
+		err := m.client.EnableService(unit)
 		return actionResultMsg{message: "Enabled " + unit, err: err}
 	}
 }
 
-func (m MainModel) disableUnit(unit string) tea.Cmd {
+func (m MainModel) disableService(unit string) tea.Cmd {
 	return func() tea.Msg {
-		err := m.systemdClient.DisableUnit(unit)
+		err := m.client.DisableService(unit)
 		return actionResultMsg{message: "Disabled " + unit, err: err}
 	}
 }
 
-func (m MainModel) editUnit(unit string) tea.Cmd {
+func (m MainModel) editService(unit string) tea.Cmd {
+	cmd, err := m.client.EditService(unit)
+	if err != nil {
+		return func() tea.Msg {
+			return editorFinishedMsg{err: err}
+		}
+	}
 	return tea.ExecProcess(
-		m.systemdClient.EditCmd(unit),
+		cmd,
 		func(err error) tea.Msg {
 			return editorFinishedMsg{err: err}
 		},
