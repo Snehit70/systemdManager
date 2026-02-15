@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"errors"
 	"os/exec"
 	"systemd-tui/internal/client"
@@ -38,6 +39,11 @@ func (m *mockServiceClient) EditService(name string) (*exec.Cmd, error) {
 	return cmd, nil
 }
 func (m *mockServiceClient) ReloadDaemon() error { return nil }
+func (m *mockServiceClient) FollowLogs(name string, opts client.LogOptions) (<-chan string, context.CancelFunc, error) {
+	ch := make(chan string)
+	cancel := func() { close(ch) }
+	return ch, cancel, nil
+}
 
 func newTestModel() MainModel {
 	return NewMainModel(&mockServiceClient{}, config.Default())

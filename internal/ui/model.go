@@ -1,7 +1,9 @@
 package ui
 
 import (
+	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"systemd-tui/internal/client"
@@ -24,18 +26,19 @@ func (i item) Description() string { return i.svc.Description }
 func (i item) FilterValue() string { return i.svc.Name }
 
 type keyMap struct {
-	Up          key.Binding
-	Down        key.Binding
-	Start       key.Binding
-	Stop        key.Binding
-	Restart     key.Binding
-	Edit        key.Binding
-	Enable      key.Binding
-	Disable     key.Binding
-	Filter      key.Binding
-	SwitchFocus key.Binding
-	Quit        key.Binding
-	Help        key.Binding
+	Up           key.Binding
+	Down         key.Binding
+	Start        key.Binding
+	Stop         key.Binding
+	Restart      key.Binding
+	Edit         key.Binding
+	Enable       key.Binding
+	Disable      key.Binding
+	Filter       key.Binding
+	SwitchFocus  key.Binding
+	ToggleFollow key.Binding
+	Quit         key.Binding
+	Help         key.Binding
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
@@ -46,7 +49,7 @@ func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.Filter, k.SwitchFocus},
 		{k.Start, k.Stop, k.Restart, k.Edit},
-		{k.Enable, k.Disable},
+		{k.Enable, k.Disable, k.ToggleFollow},
 		{k.Quit, k.Help},
 	}
 }
@@ -92,6 +95,10 @@ var keys = keyMap{
 		key.WithKeys("tab"),
 		key.WithHelp("tab", "switch view"),
 	),
+	ToggleFollow: key.NewBinding(
+		key.WithKeys("f"),
+		key.WithHelp("f", "follow logs"),
+	),
 	Quit: key.NewBinding(
 		key.WithKeys("q", "ctrl+c"),
 		key.WithHelp("q", "quit"),
@@ -123,6 +130,10 @@ type MainModel struct {
 
 	confirmingAction string
 	confirmingUnit   string
+
+	following      bool
+	followCancel   context.CancelFunc
+	followLogLines []string
 
 	activeBorder   lipgloss.Style
 	inactiveBorder lipgloss.Style
@@ -250,6 +261,9 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch {
 		case key.Matches(msg, keys.Quit):
+			if m.following {
+				m.stopFollow()
+			}
 			return m, tea.Quit
 		case key.Matches(msg, keys.SwitchFocus):
 			if m.activeView == listView {
@@ -260,6 +274,19 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case key.Matches(msg, keys.Help):
 			m.help.ShowAll = !m.help.ShowAll
+			return m, nil
+		case key.Matches(msg, keys.ToggleFollow):
+			if m.following {
+				m.stopFollow()
+				m.statusMessage = "Stopped following logs"
+			} else {
+				if selected := m.list.SelectedItem(); selected != nil {
+					svc := selected.(item).svc
+					cmd = m.startFollow(svc.Name)
+					m.statusMessage = "Following logs for " + svc.Name
+					return m, cmd
+				}
+			}
 			return m, nil
 		}
 
@@ -368,7 +395,7 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 
 	case logMsg:
-		if msg.unit == m.selectedSvc {
+		if msg.unit == m.selectedSvc && !m.following {
 			selectedItem := m.list.SelectedItem()
 			if selectedItem != nil {
 				svc := selectedItem.(item).svc
@@ -389,6 +416,26 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					)
 				}
 				m.viewport.SetContent(content)
+			}
+		}
+
+	case logLineMsg:
+		if m.following {
+			m.followLogLines = append(m.followLogLines, msg.line)
+			maxLines := 1000
+			if len(m.followLogLines) > maxLines {
+				m.followLogLines = m.followLogLines[len(m.followLogLines)-maxLines:]
+			}
+			selectedItem := m.list.SelectedItem()
+			if selectedItem != nil {
+				svc := selectedItem.(item).svc
+				content := fmt.Sprintf(
+					"Service: %s\nStatus: %s (%s)\nDescription: %s\n\n[FOLLOWING - Press f to stop]\n%s",
+					svc.Name, svc.Status, svc.Sub, svc.Description,
+					strings.Join(m.followLogLines, "\n"),
+				)
+				m.viewport.SetContent(content)
+				m.viewport.GotoBottom()
 			}
 		}
 
@@ -488,6 +535,10 @@ type logMsg struct {
 	err  error
 }
 
+type logLineMsg struct {
+	line string
+}
+
 type tickMsg time.Time
 
 func (m MainModel) fetchLogs(unit string) tea.Cmd {
@@ -549,4 +600,33 @@ func (m MainModel) editService(unit string) tea.Cmd {
 			return editorFinishedMsg{err: err}
 		},
 	)
+}
+
+func (m *MainModel) startFollow(unit string) tea.Cmd {
+	logChan, cancel, err := m.client.FollowLogs(unit, client.LogOptions{Lines: 50})
+	if err != nil {
+		return func() tea.Msg {
+			return errMsg{context: "Failed to follow logs", err: err}
+		}
+	}
+
+	m.following = true
+	m.followCancel = cancel
+	m.followLogLines = nil
+
+	return func() tea.Msg {
+		for line := range logChan {
+			return logLineMsg{line: line}
+		}
+		return nil
+	}
+}
+
+func (m *MainModel) stopFollow() {
+	if m.followCancel != nil {
+		m.followCancel()
+	}
+	m.following = false
+	m.followCancel = nil
+	m.followLogLines = nil
 }

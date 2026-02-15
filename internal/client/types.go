@@ -1,9 +1,9 @@
 package client
 
 import (
-	"time"
-
+	"context"
 	"os/exec"
+	"time"
 )
 
 // ServiceStatus represents the current state of a service
@@ -55,6 +55,10 @@ type ServiceClient interface {
 	GetStatus(name string) (ServiceStatus, error)
 	GetLogs(name string, opts LogOptions) (string, error)
 	GetConfig(name string) (string, error)
+
+	// Streaming logs - returns a channel that emits log lines
+	// Call cancel() to stop the stream
+	FollowLogs(name string, opts LogOptions) (<-chan string, context.CancelFunc, error)
 
 	// Service file management
 	EditService(name string) (*exec.Cmd, error)

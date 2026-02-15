@@ -1,6 +1,8 @@
 package service
 
 import (
+	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -92,6 +94,45 @@ func (c *systemdClient) GetLogs(name string, opts client.LogOptions) (string, er
 	}
 
 	return string(output), nil
+}
+
+func (c *systemdClient) FollowLogs(name string, opts client.LogOptions) (<-chan string, context.CancelFunc, error) {
+	lines := opts.Lines
+	if lines <= 0 {
+		lines = 50
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cmd := exec.CommandContext(ctx, "journalctl", "--user", "-u", name, "-n", fmt.Sprintf("%d", lines), "-f", "--no-pager")
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		cancel()
+		return nil, nil, fmt.Errorf("failed to create pipe: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		cancel()
+		return nil, nil, fmt.Errorf("failed to start journalctl: %w", err)
+	}
+
+	logChan := make(chan string, 100)
+
+	go func() {
+		defer close(logChan)
+		defer cmd.Wait()
+
+		scanner := bufio.NewScanner(stdout)
+		for scanner.Scan() {
+			select {
+			case logChan <- scanner.Text():
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	return logChan, cancel, nil
 }
 
 func (c *systemdClient) GetConfig(name string) (string, error) {
