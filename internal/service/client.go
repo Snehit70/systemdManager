@@ -5,15 +5,19 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
+
+	"systemd-tui/internal/client"
 )
 
-type SystemdClient struct{}
+// systemdClient implements ServiceClient for systemd user services
+type systemdClient struct{}
 
-func NewSystemdClient() *SystemdClient {
-	return &SystemdClient{}
+func NewSystemdClient() client.ServiceClient {
+	return &systemdClient{}
 }
 
-func (c *SystemdClient) ListUnits() ([]Unit, error) {
+func (c *systemdClient) ListServices() ([]client.Service, error) {
 	cmd := exec.Command("systemctl", "--user", "list-units", "--type=service", "--all", "--output=json")
 	output, err := cmd.Output()
 	if err != nil {
@@ -25,45 +29,90 @@ func (c *SystemdClient) ListUnits() ([]Unit, error) {
 		return nil, fmt.Errorf("failed to parse systemctl output: %w", err)
 	}
 
-	return units, nil
+	services := make([]client.Service, len(units))
+	for i, u := range units {
+		services[i] = c.unitToService(u)
+	}
+
+	return services, nil
 }
 
-func (c *SystemdClient) StartUnit(unit string) error {
-	return c.runAction("start", unit)
+func (c *systemdClient) StartService(name string) error {
+	return c.runAction("start", name)
 }
 
-func (c *SystemdClient) StopUnit(unit string) error {
-	return c.runAction("stop", unit)
+func (c *systemdClient) StopService(name string) error {
+	return c.runAction("stop", name)
 }
 
-func (c *SystemdClient) RestartUnit(unit string) error {
-	return c.runAction("restart", unit)
+func (c *systemdClient) RestartService(name string) error {
+	return c.runAction("restart", name)
 }
 
-func (c *SystemdClient) EnableUnit(unit string) error {
-	return c.runAction("enable", unit)
+func (c *systemdClient) EnableService(name string) error {
+	return c.runAction("enable", name)
 }
 
-func (c *SystemdClient) DisableUnit(unit string) error {
-	return c.runAction("disable", unit)
+func (c *systemdClient) DisableService(name string) error {
+	return c.runAction("disable", name)
 }
 
-func (c *SystemdClient) EditCmd(unit string) *exec.Cmd {
+func (c *systemdClient) GetStatus(name string) (client.ServiceStatus, error) {
+	cmd := exec.Command("systemctl", "--user", "show", name, "--property=ActiveState", "--value")
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to get status: %w", err)
+	}
+
+	state := client.ServiceStatus(strings.TrimSpace(string(output)))
+	return state, nil
+}
+
+func (c *systemdClient) GetLogs(name string, opts client.LogOptions) (string, error) {
+	lines := opts.Lines
+	if lines <= 0 {
+		lines = 50
+	}
+
+	args := []string{"--user", "-u", name, "-n", fmt.Sprintf("%d", lines), "--no-pager"}
+	if opts.Follow {
+		return "", fmt.Errorf("follow mode not yet supported")
+	}
+
+	cmd := exec.Command("journalctl", args...)
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to get logs: %w", err)
+	}
+
+	return string(output), nil
+}
+
+func (c *systemdClient) GetConfig(name string) (string, error) {
+	cmd := exec.Command("systemctl", "--user", "cat", name)
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to get config: %w", err)
+	}
+	return string(output), nil
+}
+
+func (c *systemdClient) EditService(name string) (*exec.Cmd, error) {
 	editor := os.Getenv("EDITOR")
 	if editor == "" {
 		editor = "vim"
 	}
 
-	cmd := exec.Command("systemctl", "--user", "edit", "--full", unit)
+	cmd := exec.Command("systemctl", "--user", "edit", "--full", name)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Env = append(os.Environ(), "SYSTEMD_EDITOR="+editor)
 
-	return cmd
+	return cmd, nil
 }
 
-func (c *SystemdClient) ReloadDaemon() error {
+func (c *systemdClient) ReloadDaemon() error {
 	cmd := exec.Command("systemctl", "--user", "daemon-reload")
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to daemon-reload: %w", err)
@@ -71,19 +120,22 @@ func (c *SystemdClient) ReloadDaemon() error {
 	return nil
 }
 
-func (c *SystemdClient) GetLogs(unit string) (string, error) {
-	cmd := exec.Command("journalctl", "--user", "-u", unit, "-n", "50", "--no-pager")
-	output, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("failed to get logs: %w", err)
-	}
-	return string(output), nil
-}
-
-func (c *SystemdClient) runAction(action, unit string) error {
+func (c *systemdClient) runAction(action, unit string) error {
 	cmd := exec.Command("systemctl", "--user", action, unit)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to %s %s: %w", action, unit, err)
 	}
 	return nil
+}
+
+func (c *systemdClient) unitToService(u Unit) client.Service {
+	enabled := u.Load == "loaded" && (u.Active == "active" || strings.Contains(u.Sub, "enabled"))
+	return client.Service{
+		Name:        u.Unit,
+		Description: u.Description,
+		Status:      client.ServiceStatus(u.Active),
+		Sub:         u.Sub,
+		Enabled:     enabled,
+		Load:        u.Load,
+	}
 }
