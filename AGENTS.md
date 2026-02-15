@@ -22,7 +22,7 @@ A terminal user interface (TUI) for managing `systemd --user` services on a pers
 - `Unit`: Struct representing a systemd unit.
     - Fields: Unit, Load, Active, Sub, Description (JSON tags for `systemctl --output=json`).
 - `ServiceClient`: Interface defining unit management operations.
-    - Methods: `ListUnits()`, `GetLogs(unit)`, `StartUnit(unit)`, `StopUnit(unit)`, `RestartUnit(unit)`, `EnableUnit(unit)`, `DisableUnit(unit)`, `EditCmd(unit)`, `ReloadDaemon()`.
+    - Methods: `ListServices()`, `GetLogs(unit)`, `FollowLogs(unit)`, `StartService(unit)`, `StopService(unit)`, `RestartService(unit)`, `EnableService(unit)`, `DisableService(unit)`, `EditService(unit)`, `ReloadDaemon()`.
     - Implementations can be provided by multiple backends (systemd, Docker, procfs).
 - The interface was introduced to decouple UI logic from the service manager, enabling easier testing and future backend support.
 
@@ -58,10 +58,10 @@ A terminal user interface (TUI) for managing `systemd --user` services on a pers
 - [x] Add visual feedback (status messages).
 - [x] Focus switching between list and detail view (`Tab`).
 
-### Phase 4: Advanced Features - PARTIAL
+### Phase 4: Advanced Features - COMPLETE
 - [x] Implement `Edit` function (`$EDITOR` integration via `tea.ExecProcess`).
 - [x] Implement `daemon-reload` hook after edit.
-- [ ] Implement live log tailing (continuous updates).
+- [x] Implement live log tailing (continuous updates).
 
 ## 5. Improvement Roadmap
 
@@ -100,8 +100,10 @@ A terminal user interface (TUI) for managing `systemd --user` services on a pers
 |------|-------------|--------|
 | 9.1 | Service grouping by load state | Pending |
 | 9.2 | Copy to clipboard (unit name, logs) | Pending |
-| 9.3 | Config file support (`~/.config/systemd-tui/config.yaml`) | Pending |
+| 9.3 | Config file support (`~/.config/systemd-tui/config.yaml`) | Complete |
 | 9.4 | Status view toggle (logs vs full `systemctl status`) | Pending |
+| 9.5 | Theme support (dark/light/high-contrast) | Complete |
+| 9.6 | Live log tailing with follow mode | Complete |
 
 ## 6. Keybindings
 
@@ -116,6 +118,7 @@ A terminal user interface (TUI) for managing `systemd --user` services on a pers
 | `e` | Edit service file | List view |
 | `E` | Enable service (with confirmation) | List view |
 | `D` | Disable service (with confirmation) | List view |
+| `f` | Toggle follow mode (live log tailing) | Global |
 | `R` | Refresh service list | Global |
 | `?` | Toggle help | Global |
 | `q` | Quit | Global |
@@ -128,17 +131,25 @@ systemdManager/
 │   └── main.go                 # Entry point
 ├── internal/
 │   ├── client/
-│   │   ├── client.go           # ServiceClient interface implementation
 │   │   ├── types.go            # ServiceClient interface definition
+│   │   └── unit.go             # Unit struct
+│   ├── config/
+│   │   └── config.go           # YAML config loading, themes
+│   ├── service/
+│   │   ├── client.go           # SystemdClient implements ServiceClient
 │   │   ├── client_test.go      # Unit tests using mock implementations
-│   │   ├── unit.go             # Unit struct
 │   │   └── unit_test.go        # Unit tests
 │   └── ui/
 │       ├── model.go            # MainModel (Bubble Tea)
 │       ├── model_test.go       # Unit tests
-│       ├── keys.go             # Keybinding definitions
-│       ├── styles.go           # Lip Gloss styles
+│       ├── styles.go           # Lip Gloss styles with theme support
 │       └── delegate.go         # Custom list delegate
+├── docs/
+│   ├── DESIGN.md               # UI architecture, specifications
+│   ├── KEYBINDINGS.md          # Complete keybinding reference
+│   ├── STATE_MACHINE.md        # Modes, edge cases, performance
+│   ├── VISUAL_DESIGN.md        # Typography, colors, accessibility
+│   └── ARCHITECTURE.md         # Technical architecture
 ├── go.mod
 ├── go.sum
 ├── .golangci.yml               # Linter configuration
@@ -167,6 +178,7 @@ require (
     github.com/charmbracelet/bubbles v0.21.0
     github.com/charmbracelet/bubbletea v1.3.10
     github.com/charmbracelet/lipgloss v1.1.0
+    gopkg.in/yaml.v3 v3.0.1
 )
 ```
 
