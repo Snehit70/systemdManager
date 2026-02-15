@@ -13,12 +13,3 @@ type UnitFile struct {
 	State    string  `json:"state"`
 	Preset   *string `json:"preset"`
 }
-
-type ServiceTemplate struct {
-	Name             string
-	Description      string
-	ExecStart        string
-	WorkingDirectory string
-	Type             string
-	Restart          string
-}

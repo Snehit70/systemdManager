@@ -244,8 +244,10 @@ func (c *systemdClient) determineSource(unitName, state string) client.ServiceSo
 }
 
 func (c *systemdClient) CreateService(tmpl client.ServiceTemplate) error {
-	if !strings.HasSuffix(tmpl.Name, ".service") {
-		tmpl.Name += ".service"
+	// Validate and sanitize service name
+	tmpl.Name = c.sanitizeServiceName(tmpl.Name)
+	if tmpl.Name == "" {
+		return fmt.Errorf("invalid service name")
 	}
 
 	if c.userConfigDir == "" {
@@ -258,13 +260,25 @@ func (c *systemdClient) CreateService(tmpl client.ServiceTemplate) error {
 	}
 
 	servicePath := filepath.Join(serviceDir, tmpl.Name)
-	if _, err := os.Stat(servicePath); err == nil {
-		return fmt.Errorf("service %s already exists", tmpl.Name)
+
+	// Sanitize template fields
+	if err := c.sanitizeTemplate(&tmpl); err != nil {
+		return fmt.Errorf("invalid template: %w", err)
 	}
 
 	content := c.generateServiceFile(tmpl)
 
-	if err := os.WriteFile(servicePath, []byte(content), 0644); err != nil {
+	// Use atomic file creation with O_EXCL to prevent race conditions
+	file, err := os.OpenFile(servicePath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+	if err != nil {
+		if os.IsExist(err) {
+			return fmt.Errorf("service %s already exists", tmpl.Name)
+		}
+		return fmt.Errorf("failed to create service file: %w", err)
+	}
+	defer file.Close()
+
+	if _, err := file.WriteString(content); err != nil {
 		return fmt.Errorf("failed to write service file: %w", err)
 	}
 
@@ -313,4 +327,43 @@ func (c *systemdClient) restartPolicy(r string) string {
 	default:
 		return "on-failure"
 	}
+}
+
+func (c *systemdClient) sanitizeServiceName(name string) string {
+	name = filepath.Base(name)
+	if strings.ContainsAny(name, "/\\") || strings.Contains(name, "..") {
+		return ""
+	}
+
+	if !strings.HasSuffix(name, ".service") {
+		name += ".service"
+	}
+
+	return name
+}
+
+func (c *systemdClient) sanitizeTemplate(tmpl *client.ServiceTemplate) error {
+	if strings.ContainsAny(tmpl.Description, "\n\r") {
+		return fmt.Errorf("description contains newlines")
+	}
+	if strings.ContainsAny(tmpl.ExecStart, "\n\r") {
+		return fmt.Errorf("exec start contains newlines")
+	}
+	if strings.ContainsAny(tmpl.WorkingDirectory, "\n\r") {
+		return fmt.Errorf("working directory contains newlines")
+	}
+	if strings.ContainsAny(tmpl.Type, "\n\r") {
+		return fmt.Errorf("type contains newlines")
+	}
+	if strings.ContainsAny(tmpl.Restart, "\n\r") {
+		return fmt.Errorf("restart contains newlines")
+	}
+
+	tmpl.Description = strings.TrimSpace(tmpl.Description)
+	tmpl.ExecStart = strings.TrimSpace(tmpl.ExecStart)
+	tmpl.WorkingDirectory = strings.TrimSpace(tmpl.WorkingDirectory)
+	tmpl.Type = strings.TrimSpace(tmpl.Type)
+	tmpl.Restart = strings.TrimSpace(tmpl.Restart)
+
+	return nil
 }

@@ -20,7 +20,7 @@ A terminal user interface for managing `systemd --user` services, inspired by La
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/systemd-tui
+git clone https://github.com/Snehit70/systemdManager
 cd systemd-tui
 
 # Build

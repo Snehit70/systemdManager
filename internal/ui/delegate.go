@@ -60,7 +60,7 @@ func sourceIndicator(source client.ServiceSource) string {
 	switch source {
 	case client.SourceUser:
 		return "●"
-	case client.SourceGenerated, client.SourceTransient, client.SourceStatic:
+	case client.SourceSystem, client.SourceGenerated, client.SourceTransient, client.SourceStatic:
 		return "○"
 	default:
 		return "·"

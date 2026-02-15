@@ -753,15 +753,12 @@ func (m MainModel) renderCreateModal(baseView string) string {
 		Background(lipgloss.Color(m.theme.Surface)).
 		Render(content)
 
-	overlayStyle := lipgloss.NewStyle().
-		Width(m.width).
-		Height(m.height).
-		Align(lipgloss.Center, lipgloss.Center)
-
-	return lipgloss.JoinVertical(
-		lipgloss.Left,
-		lipgloss.NewStyle().Faint(true).Render(baseView[:min(len(baseView), 100)]),
-		overlayStyle.Render(modal),
+	return lipgloss.Place(
+		m.width, m.height,
+		lipgloss.Center, lipgloss.Center,
+		modal,
+		lipgloss.WithWhitespaceChars(" "),
+		lipgloss.WithWhitespaceBackground(lipgloss.Color(m.theme.Background)),
 	)
 }
 
@@ -995,7 +992,7 @@ func (m MainModel) filteredServices() []client.Service {
 				filtered = append(filtered, svc)
 			}
 		case filterHideSystem:
-			if svc.Source != client.SourceStatic && svc.Source != client.SourceGenerated && svc.Source != client.SourceTransient {
+			if svc.Source != client.SourceStatic && svc.Source != client.SourceGenerated && svc.Source != client.SourceTransient && svc.Source != client.SourceSystem {
 				filtered = append(filtered, svc)
 			}
 		}
@@ -1107,9 +1104,4 @@ func (m MainModel) createServiceFromModal() (tea.Model, tea.Cmd) {
 	m.showCreate = false
 	m.statusMessage = fmt.Sprintf("Created service: %s", name)
 	return m, m.fetchServices
-}
-
-type serviceCreatedMsg struct {
-	name string
-	err  error
 }
