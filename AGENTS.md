@@ -21,8 +21,10 @@ A terminal user interface (TUI) for managing `systemd --user` services on a pers
 ### 3.1 Data Models (`internal/service`)
 - `Unit`: Struct representing a systemd unit.
     - Fields: Unit, Load, Active, Sub, Description (JSON tags for `systemctl --output=json`).
-- `SystemdClient`: Wrapper around `systemctl --user` commands.
+- `ServiceClient`: Interface defining unit management operations.
     - Methods: `ListUnits()`, `GetLogs(unit)`, `StartUnit(unit)`, `StopUnit(unit)`, `RestartUnit(unit)`, `EnableUnit(unit)`, `DisableUnit(unit)`, `EditCmd(unit)`, `ReloadDaemon()`.
+    - Implementations can be provided by multiple backends (systemd, Docker, procfs).
+- The interface was introduced to decouple UI logic from the service manager, enabling easier testing and future backend support.
 
 ### 3.2 UI Models (`internal/ui`)
 - `MainModel`: The top-level Bubble Tea model.
@@ -125,9 +127,10 @@ systemdManager/
 ├── cmd/systemd-tui/
 │   └── main.go                 # Entry point
 ├── internal/
-│   ├── service/
-│   │   ├── client.go           # SystemdClient wrapper
-│   │   ├── client_test.go      # Unit tests
+│   ├── client/
+│   │   ├── client.go           # ServiceClient interface implementation
+│   │   ├── types.go            # ServiceClient interface definition
+│   │   ├── client_test.go      # Unit tests using mock implementations
 │   │   ├── unit.go             # Unit struct
 │   │   └── unit_test.go        # Unit tests
 │   └── ui/
