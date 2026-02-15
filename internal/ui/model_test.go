@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os/exec"
 	"systemd-tui/internal/client"
+	"systemd-tui/internal/config"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -38,9 +39,12 @@ func (m *mockServiceClient) EditService(name string) (*exec.Cmd, error) {
 }
 func (m *mockServiceClient) ReloadDaemon() error { return nil }
 
+func newTestModel() MainModel {
+	return NewMainModel(&mockServiceClient{}, config.Default())
+}
+
 func TestMainModelInit(t *testing.T) {
-	client := &mockServiceClient{}
-	model := NewMainModel(client)
+	model := newTestModel()
 
 	if model.activeView != listView {
 		t.Errorf("Expected initial activeView to be listView (0), got %d", model.activeView)
@@ -54,8 +58,7 @@ func TestMainModelInit(t *testing.T) {
 }
 
 func TestConfirmationStateTransitions(t *testing.T) {
-	client := &mockServiceClient{}
-	model := NewMainModel(client)
+	model := newTestModel()
 
 	model.confirmingAction = "stop"
 	model.confirmingUnit = "test.service"
@@ -77,8 +80,7 @@ func TestConfirmationStateTransitions(t *testing.T) {
 }
 
 func TestConfirmationCancelOnEscape(t *testing.T) {
-	client := &mockServiceClient{}
-	model := NewMainModel(client)
+	model := newTestModel()
 
 	model.confirmingAction = "restart"
 	model.confirmingUnit = "test.service"
@@ -96,8 +98,7 @@ func TestConfirmationCancelOnEscape(t *testing.T) {
 }
 
 func TestErrorMessageHandling(t *testing.T) {
-	client := &mockServiceClient{}
-	model := NewMainModel(client)
+	model := newTestModel()
 
 	testErr := errors.New("test error")
 	errMsg := errMsg{context: "Test", err: testErr}
@@ -112,8 +113,7 @@ func TestErrorMessageHandling(t *testing.T) {
 }
 
 func TestActionResultMessageHandling(t *testing.T) {
-	client := &mockServiceClient{}
-	model := NewMainModel(client)
+	model := newTestModel()
 
 	actionMsg := actionResultMsg{message: "Started test.service", err: nil}
 	updatedModel, _ := model.Update(actionMsg)
@@ -134,8 +134,7 @@ func TestActionResultMessageHandling(t *testing.T) {
 }
 
 func TestWindowSizeHandling(t *testing.T) {
-	client := &mockServiceClient{}
-	model := NewMainModel(client)
+	model := newTestModel()
 
 	sizeMsg := tea.WindowSizeMsg{Width: 100, Height: 40}
 	updatedModel, _ := model.Update(sizeMsg)
@@ -147,8 +146,7 @@ func TestWindowSizeHandling(t *testing.T) {
 }
 
 func TestViewSwitching(t *testing.T) {
-	client := &mockServiceClient{}
-	model := NewMainModel(client)
+	model := newTestModel()
 
 	if model.activeView != listView {
 		t.Errorf("Expected listView initially")

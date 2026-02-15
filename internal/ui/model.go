@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"systemd-tui/internal/client"
+	"systemd-tui/internal/config"
 
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
@@ -112,6 +113,8 @@ type MainModel struct {
 	help          help.Model
 	services      []client.Service
 	client        client.ServiceClient
+	config        *config.Config
+	theme         config.ThemeColors
 	width         int
 	height        int
 	statusMessage string
@@ -126,7 +129,10 @@ type MainModel struct {
 	detailStyle    lipgloss.Style
 }
 
-func NewMainModel(client client.ServiceClient) MainModel {
+func NewMainModel(client client.ServiceClient, cfg *config.Config) MainModel {
+	theme := cfg.ThemeColors()
+	ApplyTheme(theme)
+
 	l := list.New(nil, itemDelegate{}, 0, 0)
 	l.Title = "User Services"
 	l.SetShowHelp(false)
@@ -142,12 +148,12 @@ func NewMainModel(client client.ServiceClient) MainModel {
 
 	active := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("62")).
+		BorderForeground(lipgloss.Color(theme.BorderActive)).
 		MarginRight(1)
 
 	inactive := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("240")).
+		BorderForeground(lipgloss.Color(theme.Border)).
 		MarginRight(1)
 
 	return MainModel{
@@ -155,6 +161,8 @@ func NewMainModel(client client.ServiceClient) MainModel {
 		viewport:       vp,
 		help:           help.New(),
 		client:         client,
+		config:         cfg,
+		theme:          theme,
 		activeView:     listView,
 		activeBorder:   active,
 		inactiveBorder: inactive,
@@ -167,7 +175,11 @@ func (m MainModel) Init() tea.Cmd {
 }
 
 func (m MainModel) tick() tea.Cmd {
-	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+	interval := m.config.General.RefreshInterval
+	if interval <= 0 {
+		interval = 2 * time.Second
+	}
+	return tea.Tick(interval, func(t time.Time) tea.Msg {
 		return tickMsg(t)
 	})
 }
@@ -360,6 +372,10 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			selectedItem := m.list.SelectedItem()
 			if selectedItem != nil {
 				svc := selectedItem.(item).svc
+				lines := m.config.General.LogLines
+				if lines <= 0 {
+					lines = 50
+				}
 				var content string
 				if msg.err != nil {
 					content = fmt.Sprintf(
@@ -368,8 +384,8 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					)
 				} else {
 					content = fmt.Sprintf(
-						"Service: %s\nStatus: %s (%s)\nDescription: %s\n\n[Last 50 Lines of Log]\n%s",
-						svc.Name, svc.Status, svc.Sub, svc.Description, msg.logs,
+						"Service: %s\nStatus: %s (%s)\nDescription: %s\n\n[Last %d Lines of Log]\n%s",
+						svc.Name, svc.Status, svc.Sub, svc.Description, lines, msg.logs,
 					)
 				}
 				m.viewport.SetContent(content)
@@ -412,7 +428,7 @@ func (m MainModel) View() string {
 	statusBar := ""
 	if m.statusMessage != "" {
 		statusStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("241")).
+			Foreground(lipgloss.Color(m.theme.TextMuted)).
 			PaddingLeft(1).
 			Width(fullWidth)
 		statusBar = statusStyle.Render(m.statusMessage)
@@ -429,7 +445,8 @@ func (m MainModel) View() string {
 	helpStyle := lipgloss.NewStyle().
 		PaddingLeft(1).
 		Width(fullWidth).
-		Background(lipgloss.Color("235"))
+		Background(lipgloss.Color(m.theme.Surface)).
+		Foreground(lipgloss.Color(m.theme.Text))
 	helpView := helpStyle.Render(m.help.View(keys))
 
 	return lipgloss.JoinVertical(
@@ -475,7 +492,11 @@ type tickMsg time.Time
 
 func (m MainModel) fetchLogs(unit string) tea.Cmd {
 	return func() tea.Msg {
-		logs, err := m.client.GetLogs(unit, client.LogOptions{Lines: 50})
+		lines := m.config.General.LogLines
+		if lines <= 0 {
+			lines = 50
+		}
+		logs, err := m.client.GetLogs(unit, client.LogOptions{Lines: lines})
 		return logMsg{unit: unit, logs: logs, err: err}
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"systemd-tui/internal/config"
 	"systemd-tui/internal/service"
 	"systemd-tui/internal/ui"
 
@@ -11,9 +12,15 @@ import (
 )
 
 func main() {
-	client := service.NewSystemdClient()
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
+		os.Exit(1)
+	}
 
-	m := ui.NewMainModel(client)
+	client := service.NewSystemdClient(cfg)
+
+	m := ui.NewMainModel(client, cfg)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {

@@ -6,7 +6,6 @@ import (
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 type itemDelegate struct{}
@@ -25,10 +24,7 @@ func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list
 
 	var str string
 	if index == m.Index() {
-		selectedStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("170")).
-			Bold(true)
-		str = selectedStyle.Render("> " + statusStyle.Render(i.svc.Name))
+		str = SelectedStyle.Render("> " + statusStyle.Render(i.svc.Name))
 	} else {
 		str = "  " + statusStyle.Render(i.svc.Name)
 	}
@@ -37,11 +33,10 @@ func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list
 	if len(desc) > 50 {
 		desc = desc[:47] + "..."
 	}
-	descStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("241"))
+	descStyle := DescriptionStyle
 
 	if i.svc.Status == "failed" {
-		descStyle = descStyle.Foreground(lipgloss.Color("203"))
+		descStyle = FailedStyle
 	}
 
 	str += "\n  " + descStyle.Render(desc)

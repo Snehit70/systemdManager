@@ -11,10 +11,16 @@ import (
 )
 
 // systemdClient implements ServiceClient for systemd user services
-type systemdClient struct{}
+type systemdClient struct {
+	editor string
+}
 
-func NewSystemdClient() client.ServiceClient {
-	return &systemdClient{}
+func NewSystemdClient(cfg interface{ GetEditor() string }) client.ServiceClient {
+	editor := "vim"
+	if cfg != nil {
+		editor = cfg.GetEditor()
+	}
+	return &systemdClient{editor: editor}
 }
 
 func (c *systemdClient) ListServices() ([]client.Service, error) {
@@ -98,16 +104,11 @@ func (c *systemdClient) GetConfig(name string) (string, error) {
 }
 
 func (c *systemdClient) EditService(name string) (*exec.Cmd, error) {
-	editor := os.Getenv("EDITOR")
-	if editor == "" {
-		editor = "vim"
-	}
-
 	cmd := exec.Command("systemctl", "--user", "edit", "--full", name)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	cmd.Env = append(os.Environ(), "SYSTEMD_EDITOR="+editor)
+	cmd.Env = append(os.Environ(), "SYSTEMD_EDITOR="+c.editor)
 
 	return cmd, nil
 }

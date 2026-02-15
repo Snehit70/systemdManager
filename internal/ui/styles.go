@@ -1,20 +1,44 @@
 package ui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"systemd-tui/internal/config"
+
+	"github.com/charmbracelet/lipgloss"
+)
 
 var (
+	ActiveStyle      lipgloss.Style
+	FailedStyle      lipgloss.Style
+	InactiveStyle    lipgloss.Style
+	DegradedStyle    lipgloss.Style
+	SelectedStyle    lipgloss.Style
+	DescriptionStyle lipgloss.Style
+)
+
+func ApplyTheme(theme config.ThemeColors) {
 	ActiveStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#73F59F"))
+		Foreground(lipgloss.Color(theme.StatusActive))
 
 	FailedStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#FF6B6B"))
+		Foreground(lipgloss.Color(theme.StatusFailed))
 
 	InactiveStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#666666"))
+		Foreground(lipgloss.Color(theme.StatusInactive))
 
 	DegradedStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#FFA500"))
-)
+		Foreground(lipgloss.Color("#FFA500"))
+
+	SelectedStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.BorderActive)).
+		Bold(true)
+
+	DescriptionStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.TextMuted))
+}
+
+func init() {
+	ApplyTheme(config.DarkTheme)
+}
 
 func GetStatusStyle(activeState string) lipgloss.Style {
 	switch activeState {
