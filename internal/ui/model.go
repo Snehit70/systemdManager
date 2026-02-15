@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -38,6 +39,8 @@ type keyMap struct {
 	SwitchFocus  key.Binding
 	ToggleFollow key.Binding
 	ToggleGroup  key.Binding
+	ToggleSource key.Binding
+	Create       key.Binding
 	Quit         key.Binding
 	Help         key.Binding
 }
@@ -51,7 +54,7 @@ func (k keyMap) FullHelp() [][]key.Binding {
 		{k.Up, k.Down, k.Filter, k.SwitchFocus},
 		{k.Start, k.Stop, k.Restart, k.Edit},
 		{k.Enable, k.Disable, k.ToggleFollow, k.ToggleGroup},
-		{k.Quit, k.Help},
+		{k.Create, k.ToggleSource, k.Quit, k.Help},
 	}
 }
 
@@ -67,7 +70,7 @@ func renderHelpBar(k keyMap, width int, theme config.ThemeColors) string {
 	bindings := []key.Binding{
 		k.Up, k.Start, k.Enable, k.ToggleFollow, k.Quit,
 		k.Down, k.Stop, k.Disable, k.ToggleGroup, k.Help,
-		k.Filter, k.Restart, k.Edit, k.SwitchFocus,
+		k.Filter, k.Restart, k.Edit, k.SwitchFocus, k.Create, k.ToggleSource,
 	}
 
 	var parts []string
@@ -136,6 +139,14 @@ var keys = keyMap{
 		key.WithKeys("g"),
 		key.WithHelp("g", "group by status"),
 	),
+	ToggleSource: key.NewBinding(
+		key.WithKeys("F"),
+		key.WithHelp("F", "filter source"),
+	),
+	Create: key.NewBinding(
+		key.WithKeys("c"),
+		key.WithHelp("c", "create service"),
+	),
 	Quit: key.NewBinding(
 		key.WithKeys("q", "ctrl+c"),
 		key.WithHelp("q", "quit"),
@@ -174,6 +185,67 @@ func (g groupMode) Next() groupMode {
 	return (g + 1) % 3
 }
 
+type filterMode int
+
+const (
+	filterAll filterMode = iota
+	filterUserOnly
+	filterHideSystem
+)
+
+func (f filterMode) String() string {
+	switch f {
+	case filterUserOnly:
+		return "my services"
+	case filterHideSystem:
+		return "hide system"
+	default:
+		return "all"
+	}
+}
+
+func (f filterMode) Next() filterMode {
+	return (f + 1) % 3
+}
+
+type createModal struct {
+	focusIndex   int
+	nameInput    textinput.Model
+	execInput    textinput.Model
+	descInput    textinput.Model
+	workdirInput textinput.Model
+	serviceType  string
+	restart      string
+}
+
+func newCreateModal() createModal {
+	name := textinput.New()
+	name.Placeholder = "my-service"
+	name.Focus()
+	name.CharLimit = 100
+
+	exec := textinput.New()
+	exec.Placeholder = "/path/to/command --args"
+	exec.CharLimit = 500
+
+	desc := textinput.New()
+	desc.Placeholder = "Service description"
+	desc.CharLimit = 200
+
+	workdir := textinput.New()
+	workdir.Placeholder = "~"
+	workdir.CharLimit = 200
+
+	return createModal{
+		nameInput:    name,
+		execInput:    exec,
+		descInput:    desc,
+		workdirInput: workdir,
+		serviceType:  "simple",
+		restart:      "on-failure",
+	}
+}
+
 type MainModel struct {
 	list          list.Model
 	viewport      viewport.Model
@@ -195,7 +267,11 @@ type MainModel struct {
 	followCancel   context.CancelFunc
 	followLogLines []string
 
-	groupMode groupMode
+	groupMode  groupMode
+	filterMode filterMode
+
+	createModal createModal
+	showCreate  bool
 
 	activeBorder   lipgloss.Style
 	inactiveBorder lipgloss.Style
@@ -288,6 +364,10 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 
+		if m.showCreate {
+			return m.handleCreateModal(msg)
+		}
+
 		if m.confirmingAction != "" {
 			switch msg.String() {
 			case "y", "Y":
@@ -351,19 +431,17 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, keys.ToggleGroup):
 			m.groupMode = m.groupMode.Next()
 			m.statusMessage = fmt.Sprintf("Group by: %s", m.groupMode)
-			var items []list.Item
-			switch m.groupMode {
-			case groupByStatus:
-				items = m.groupedByStatus()
-			case groupByLoad:
-				items = m.groupedByLoad()
-			default:
-				for _, svc := range m.services {
-					items = append(items, item{svc: svc})
-				}
-			}
-			cmd = m.list.SetItems(items)
-			cmds = append(cmds, cmd)
+			cmds = append(cmds, m.updateListItems())
+
+		case key.Matches(msg, keys.ToggleSource):
+			m.filterMode = m.filterMode.Next()
+			m.statusMessage = fmt.Sprintf("Filter: %s", m.filterMode)
+			cmds = append(cmds, m.updateListItems())
+
+		case key.Matches(msg, keys.Create):
+			m.showCreate = true
+			m.createModal = newCreateModal()
+			return m, nil
 		}
 
 		if m.activeView == listView {
@@ -436,21 +514,15 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case []client.Service:
 		m.services = msg
-		m.statusMessage = fmt.Sprintf("Loaded %d services", len(msg))
-
-		var items []list.Item
-		switch m.groupMode {
-		case groupByStatus:
-			items = m.groupedByStatus()
-		case groupByLoad:
-			items = m.groupedByLoad()
-		default:
-			for _, svc := range m.services {
-				items = append(items, item{svc: svc})
+		userCount := 0
+		for _, svc := range m.services {
+			if svc.Source == client.SourceUser {
+				userCount++
 			}
 		}
-		cmd = m.list.SetItems(items)
-		cmds = append(cmds, cmd)
+		m.statusMessage = fmt.Sprintf("Loaded %d services (%d user-created)", len(msg), userCount)
+
+		cmds = append(cmds, m.updateListItems())
 
 		if m.list.SelectedItem() != nil {
 			svc := m.list.SelectedItem().(item).svc
@@ -581,12 +653,115 @@ func (m MainModel) View() string {
 
 	helpView := renderHelpBar(keys, fullWidth, m.theme)
 
-	return lipgloss.JoinVertical(
+	baseView := lipgloss.JoinVertical(
 		lipgloss.Left,
 		mainView,
 		filterBar,
 		statusBar,
 		helpView,
+	)
+
+	if m.showCreate {
+		return m.renderCreateModal(baseView)
+	}
+
+	return baseView
+}
+
+func (m MainModel) renderCreateModal(baseView string) string {
+	modalWidth := 60
+	modalHeight := 18
+
+	labelStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(m.theme.Text)).
+		Bold(true)
+
+	inputStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(m.theme.TextMuted))
+
+	focusStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(m.theme.BorderActive)).
+		Bold(true)
+
+	var inputs []string
+
+	nameLabel := "Name:"
+	if m.createModal.focusIndex == 0 {
+		nameLabel = focusStyle.Render("Name:")
+	} else {
+		nameLabel = labelStyle.Render("Name:")
+	}
+	inputs = append(inputs, fmt.Sprintf("%s %s", nameLabel, m.createModal.nameInput.View()))
+
+	execLabel := "Command:"
+	if m.createModal.focusIndex == 1 {
+		execLabel = focusStyle.Render("Command:")
+	} else {
+		execLabel = labelStyle.Render("Command:")
+	}
+	inputs = append(inputs, fmt.Sprintf("%s %s", execLabel, m.createModal.execInput.View()))
+
+	descLabel := "Description:"
+	if m.createModal.focusIndex == 2 {
+		descLabel = focusStyle.Render("Description:")
+	} else {
+		descLabel = labelStyle.Render("Description:")
+	}
+	inputs = append(inputs, fmt.Sprintf("%s %s", descLabel, m.createModal.descInput.View()))
+
+	workdirLabel := "Workdir:"
+	if m.createModal.focusIndex == 3 {
+		workdirLabel = focusStyle.Render("Workdir:")
+	} else {
+		workdirLabel = labelStyle.Render("Workdir:")
+	}
+	inputs = append(inputs, fmt.Sprintf("%s %s", workdirLabel, m.createModal.workdirInput.View()))
+
+	typeLabel := "Type:"
+	if m.createModal.focusIndex == 4 {
+		typeLabel = focusStyle.Render("Type:")
+	} else {
+		typeLabel = labelStyle.Render("Type:")
+	}
+	inputs = append(inputs, fmt.Sprintf("%s %s", typeLabel, inputStyle.Render(m.createModal.serviceType+" (t to toggle)")))
+
+	restartLabel := "Restart:"
+	if m.createModal.focusIndex == 5 {
+		restartLabel = focusStyle.Render("Restart:")
+	} else {
+		restartLabel = labelStyle.Render("Restart:")
+	}
+	inputs = append(inputs, fmt.Sprintf("%s %s", restartLabel, inputStyle.Render(m.createModal.restart+" (r to cycle)")))
+
+	content := lipgloss.NewStyle().
+		Width(modalWidth).
+		Height(modalHeight).
+		Padding(1, 2).
+		Render(
+			lipgloss.JoinVertical(lipgloss.Left,
+				lipgloss.NewStyle().Bold(true).Render("Create New Service"),
+				"",
+				strings.Join(inputs, "\n"),
+				"",
+				inputStyle.Render("Tab: next • Shift+Tab: prev • Enter: create • Esc: cancel"),
+			),
+		)
+
+	modal := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(m.theme.BorderActive)).
+		Background(lipgloss.Color(m.theme.Surface)).
+		Render(content)
+
+	overlayStyle := lipgloss.NewStyle().
+		Width(m.width).
+		Height(m.height).
+		Align(lipgloss.Center, lipgloss.Center)
+
+	return lipgloss.JoinVertical(
+		lipgloss.Left,
+		lipgloss.NewStyle().Faint(true).Render(baseView[:min(len(baseView), 100)]),
+		overlayStyle.Render(modal),
 	)
 }
 
@@ -725,7 +900,7 @@ func (m MainModel) updateListItems() tea.Cmd {
 	case groupByLoad:
 		items = m.groupedByLoad()
 	default:
-		for _, svc := range m.services {
+		for _, svc := range m.filteredServices() {
 			items = append(items, item{svc: svc})
 		}
 	}
@@ -746,7 +921,7 @@ func (m MainModel) groupedByStatus() []list.Item {
 	failed := make([]list.Item, 0)
 	inactive := make([]list.Item, 0)
 
-	for _, svc := range m.services {
+	for _, svc := range m.filteredServices() {
 		switch svc.Status {
 		case client.StatusActive:
 			active = append(active, item{svc: svc})
@@ -779,7 +954,7 @@ func (m MainModel) groupedByLoad() []list.Item {
 	notFound := make([]list.Item, 0)
 	other := make([]list.Item, 0)
 
-	for _, svc := range m.services {
+	for _, svc := range m.filteredServices() {
 		switch svc.Load {
 		case "loaded":
 			loaded = append(loaded, item{svc: svc})
@@ -805,4 +980,136 @@ func (m MainModel) groupedByLoad() []list.Item {
 	}
 
 	return items
+}
+
+func (m MainModel) filteredServices() []client.Service {
+	if m.filterMode == filterAll {
+		return m.services
+	}
+
+	filtered := make([]client.Service, 0)
+	for _, svc := range m.services {
+		switch m.filterMode {
+		case filterUserOnly:
+			if svc.Source == client.SourceUser {
+				filtered = append(filtered, svc)
+			}
+		case filterHideSystem:
+			if svc.Source != client.SourceStatic && svc.Source != client.SourceGenerated && svc.Source != client.SourceTransient {
+				filtered = append(filtered, svc)
+			}
+		}
+	}
+	return filtered
+}
+
+func (m MainModel) handleCreateModal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c", "esc":
+		m.showCreate = false
+		return m, nil
+
+	case "tab", "shift+tab":
+		if msg.String() == "shift+tab" {
+			m.createModal.focusIndex--
+			if m.createModal.focusIndex < 0 {
+				m.createModal.focusIndex = 5
+			}
+		} else {
+			m.createModal.focusIndex = (m.createModal.focusIndex + 1) % 6
+		}
+		m.focusCreateInput()
+		return m, nil
+
+	case "enter":
+		return m.createServiceFromModal()
+
+	case "t", "T":
+		if m.createModal.focusIndex == 4 {
+			if m.createModal.serviceType == "simple" {
+				m.createModal.serviceType = "oneshot"
+			} else {
+				m.createModal.serviceType = "simple"
+			}
+			return m, nil
+		}
+
+	case "r", "R":
+		if m.createModal.focusIndex == 5 {
+			switch m.createModal.restart {
+			case "on-failure":
+				m.createModal.restart = "always"
+			case "always":
+				m.createModal.restart = "no"
+			default:
+				m.createModal.restart = "on-failure"
+			}
+			return m, nil
+		}
+	}
+
+	switch m.createModal.focusIndex {
+	case 0:
+		m.createModal.nameInput, _ = m.createModal.nameInput.Update(msg)
+	case 1:
+		m.createModal.execInput, _ = m.createModal.execInput.Update(msg)
+	case 2:
+		m.createModal.descInput, _ = m.createModal.descInput.Update(msg)
+	case 3:
+		m.createModal.workdirInput, _ = m.createModal.workdirInput.Update(msg)
+	}
+
+	return m, nil
+}
+
+func (m *MainModel) focusCreateInput() {
+	m.createModal.nameInput.Blur()
+	m.createModal.execInput.Blur()
+	m.createModal.descInput.Blur()
+	m.createModal.workdirInput.Blur()
+
+	switch m.createModal.focusIndex {
+	case 0:
+		m.createModal.nameInput.Focus()
+	case 1:
+		m.createModal.execInput.Focus()
+	case 2:
+		m.createModal.descInput.Focus()
+	case 3:
+		m.createModal.workdirInput.Focus()
+	}
+}
+
+func (m MainModel) createServiceFromModal() (tea.Model, tea.Cmd) {
+	name := m.createModal.nameInput.Value()
+	exec := m.createModal.execInput.Value()
+
+	if name == "" || exec == "" {
+		m.statusMessage = "Error: name and command are required"
+		return m, nil
+	}
+
+	tmpl := client.ServiceTemplate{
+		Name:             name,
+		Description:      m.createModal.descInput.Value(),
+		ExecStart:        exec,
+		WorkingDirectory: m.createModal.workdirInput.Value(),
+		Type:             m.createModal.serviceType,
+		Restart:          m.createModal.restart,
+	}
+
+	err := m.client.CreateService(tmpl)
+	if err != nil {
+		m.statusMessage = "Failed to create service: " + err.Error()
+		return m, nil
+	}
+
+	m.showCreate = false
+	m.statusMessage = fmt.Sprintf("Created service: %s", name)
+	return m, m.fetchServices
+}
+
+type serviceCreatedMsg struct {
+	name string
+	err  error
 }

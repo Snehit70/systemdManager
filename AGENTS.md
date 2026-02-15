@@ -21,8 +21,13 @@ A terminal user interface (TUI) for managing `systemd --user` services on a pers
 ### 3.1 Data Models (`internal/service`)
 - `Unit`: Struct representing a systemd unit.
     - Fields: Unit, Load, Active, Sub, Description (JSON tags for `systemctl --output=json`).
+- `UnitFile`: Struct for unit file state information.
+    - Fields: UnitFile, State, Preset (JSON tags for `systemctl list-unit-files --output=json`).
+- `Service`: Struct representing a managed service.
+    - Fields: Name, Description, Status, Sub, Enabled, Load, Source, PID, Memory, CPU, Since.
+    - `Source`: Indicates where unit file originates (user/system/generated/transient/static).
 - `ServiceClient`: Interface defining unit management operations.
-    - Methods: `ListServices()`, `GetLogs(unit)`, `FollowLogs(unit)`, `StartService(unit)`, `StopService(unit)`, `RestartService(unit)`, `EnableService(unit)`, `DisableService(unit)`, `EditService(unit)`, `ReloadDaemon()`.
+    - Methods: `ListServices()`, `GetLogs(unit)`, `FollowLogs(unit)`, `StartService(unit)`, `StopService(unit)`, `RestartService(unit)`, `EnableService(unit)`, `DisableService(unit)`, `EditService(unit)`, `ReloadDaemon()`, `CreateService(template)`.
     - Implementations can be provided by multiple backends (systemd, Docker, procfs).
 - The interface was introduced to decouple UI logic from the service manager, enabling easier testing and future backend support.
 
@@ -105,6 +110,16 @@ A terminal user interface (TUI) for managing `systemd --user` services on a pers
 | 9.5 | Theme support (dark/light/high-contrast) | Complete |
 | 9.6 | Live log tailing with follow mode | Complete |
 
+### Phase 10: Service Creation & Filtering (Priority: High) - COMPLETE
+| Task | Description | Status |
+|------|-------------|--------|
+| 10.1 | Add `Source` field to `Service` struct for categorization | Complete |
+| 10.2 | Add `CreateService` method to `ServiceClient` interface | Complete |
+| 10.3 | Implement source detection (user/system/generated/transient/static) | Complete |
+| 10.4 | Add filter mode cycling (`F` key) | Complete |
+| 10.5 | Add service creation modal (`c` key) | Complete |
+| 10.6 | Add source indicator in list (`●` user, `○` system) | Complete |
+
 ## 6. Keybindings
 
 | Key | Action | Scope |
@@ -118,11 +133,24 @@ A terminal user interface (TUI) for managing `systemd --user` services on a pers
 | `e` | Edit service file | List view |
 | `E` | Enable service (with confirmation) | List view |
 | `D` | Disable service (with confirmation) | List view |
+| `c` | Create new service | List view |
 | `f` | Toggle follow mode (live log tailing) | Global |
 | `g` | Toggle grouping (none/status/load) | Global |
+| `F` | Cycle filter mode (all/my services/hide system) | Global |
 | `R` | Refresh service list | Global |
 | `?` | Toggle help | Global |
 | `q` | Quit | Global |
+
+### Create Service Modal Keys
+
+| Key | Action |
+|-----|--------|
+| `Tab` | Next field |
+| `Shift+Tab` | Previous field |
+| `t` | Toggle service type (simple/oneshot) |
+| `r` | Cycle restart policy (on-failure/always/no) |
+| `Enter` | Create service |
+| `Esc` | Cancel |
 
 ## 7. File Structure
 
@@ -132,14 +160,13 @@ systemdManager/
 │   └── main.go                 # Entry point
 ├── internal/
 │   ├── client/
-│   │   ├── types.go            # ServiceClient interface definition
-│   │   └── unit.go             # Unit struct
+│   │   └── types.go            # ServiceClient interface, Service, ServiceTemplate structs
 │   ├── config/
 │   │   └── config.go           # YAML config loading, themes
 │   ├── service/
 │   │   ├── client.go           # SystemdClient implements ServiceClient
 │   │   ├── client_test.go      # Unit tests using mock implementations
-│   │   └── unit_test.go        # Unit tests
+│   │   └── unit.go             # Unit, UnitFile structs
 │   └── ui/
 │       ├── model.go            # MainModel (Bubble Tea)
 │       ├── model_test.go       # Unit tests

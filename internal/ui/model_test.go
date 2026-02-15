@@ -44,6 +44,7 @@ func (m *mockServiceClient) FollowLogs(name string, opts client.LogOptions) (<-c
 	cancel := func() { close(ch) }
 	return ch, cancel, nil
 }
+func (m *mockServiceClient) CreateService(tmpl client.ServiceTemplate) error { return nil }
 
 func newTestModel() MainModel {
 	return NewMainModel(&mockServiceClient{}, config.Default())
@@ -112,7 +113,7 @@ func TestErrorMessageHandling(t *testing.T) {
 	updatedModel, _ := model.Update(errMsg)
 	m := updatedModel.(MainModel)
 
-	expected := "Test: test error"
+	expected := "Error: Test - test error"
 	if m.statusMessage != expected {
 		t.Errorf("Expected '%s', got '%s'", expected, m.statusMessage)
 	}
