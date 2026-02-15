@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -221,6 +222,15 @@ func (m *mockSystemdClient) ReloadDaemon() error {
 		return errors.New("failed to reload daemon")
 	}
 	return nil
+}
+
+func (m *mockSystemdClient) FollowLogs(name string, opts client.LogOptions) (<-chan string, context.CancelFunc, error) {
+	if name == "error.service" {
+		return nil, nil, errors.New("failed to follow logs")
+	}
+	ch := make(chan string)
+	cancel := func() { close(ch) }
+	return ch, cancel, nil
 }
 
 // Tests for systemdClient implementation
