@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+// itemDelegate implements list.DefaultDelegate for custom service item rendering.
 type itemDelegate struct{}
 
 func (d itemDelegate) Height() int                             { return 2 }
@@ -56,6 +57,7 @@ func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list
 	fmt.Fprint(w, str)
 }
 
+// sourceIndicator returns a visual indicator for the service source type.
 func sourceIndicator(source client.ServiceSource) string {
 	switch source {
 	case client.SourceUser:

@@ -1,5 +1,6 @@
 package service
 
+// Unit represents a systemd unit from systemctl list-units output.
 type Unit struct {
 	Unit        string `json:"unit"`
 	Load        string `json:"load"`
@@ -8,6 +9,7 @@ type Unit struct {
 	Description string `json:"description"`
 }
 
+// UnitFile represents a systemd unit file from systemctl list-unit-files output.
 type UnitFile struct {
 	UnitFile string  `json:"unit_file"`
 	State    string  `json:"state"`
