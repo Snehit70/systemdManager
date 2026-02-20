@@ -8,6 +8,13 @@ This document describes manual testing scenarios for the systemd TUI manager.
 - At least one user service available (`systemctl --user list-units --type=service`)
 - Terminal with 80x24 minimum size
 
+## Build & Run
+
+```bash
+go build -o systemd-tui ./cmd/systemd-tui
+./systemd-tui
+```
+
 ## Test Scenarios
 
 ### 1. Application Launch
@@ -28,7 +35,7 @@ This document describes manual testing scenarios for the systemd TUI manager.
 | Help toggle | Press `?` | Help panel expands/collapses |
 | Quit | Press `q` | Application exits cleanly |
 
-### 3. Filtering
+### 3. Text Filtering
 
 | Test | Steps | Expected Result |
 |------|-------|-----------------|
@@ -37,7 +44,36 @@ This document describes manual testing scenarios for the systemd TUI manager.
 | Clear filter | Press `Esc` in filter mode | Filter clears, full list restored |
 | No matches | Filter with non-existent name | "No matching services" or empty list |
 
-### 4. Service Actions
+### 4. Source Filtering (NEW)
+
+| Test | Steps | Expected Result |
+|------|-------|-----------------|
+| Cycle filter | Press `F` | Status bar shows filter mode: "all" → "my services" → "hide system" → "all" |
+| My services | Filter mode "my services" | Only shows services created by user (● indicator) |
+| Hide system | Filter mode "hide system" | Hides static, generated, transient, and system services |
+
+### 5. Source Indicators (NEW)
+
+| Test | Steps | Expected Result |
+|------|-------|-----------------|
+| User service | Look at service you created | Shows `●` (filled circle) before name |
+| System service | Look at system-provided service | Shows `○` (empty circle) before name |
+| Unknown source | Services without clear source | Shows `·` (dot) before name |
+
+### 6. Service Creation (NEW)
+
+| Test | Steps | Expected Result |
+|------|-------|-----------------|
+| Open modal | Press `c` | Create service modal appears centered |
+| Navigate fields | Press `Tab` / `Shift+Tab` | Focus moves between fields |
+| Toggle type | Press `t` when Type field focused | Cycles: simple → oneshot → simple |
+| Cycle restart | Press `r` when Restart field focused | Cycles: on-failure → always → no → on-failure |
+| Cancel creation | Press `Esc` | Modal closes, no service created |
+| Create minimal | Name: "test", Command: "/bin/echo test", Enter | Service created, status shows success |
+| Create with all fields | Fill all fields, Enter | Service created with all settings |
+| Validation error | Leave Name empty, press Enter | Shows "Error: name and command are required" |
+
+### 7. Service Actions
 
 | Test | Steps | Expected Result |
 |------|-------|-----------------|
@@ -49,7 +85,7 @@ This document describes manual testing scenarios for the systemd TUI manager.
 | Enable service | Select service, press `E` | Confirmation, then service enabled |
 | Disable service | Select service, press `D` | Confirmation, then service disabled |
 
-### 5. Edit Functionality
+### 8. Edit Functionality
 
 | Test | Steps | Expected Result |
 |------|-------|-----------------|
@@ -58,7 +94,7 @@ This document describes manual testing scenarios for the systemd TUI manager.
 | Cancel edit | Exit editor without saving | No daemon reload |
 | EDITOR variable | Set `EDITOR=nano`, press `e` | Opens in nano instead of vim |
 
-### 6. Visual Indicators
+### 9. Visual Indicators
 
 | Test | Steps | Expected Result |
 |------|-------|-----------------|
@@ -67,14 +103,30 @@ This document describes manual testing scenarios for the systemd TUI manager.
 | Inactive service | View inactive service in list | Name displayed in gray |
 | Selected item | Navigate to item | Shows `>` prefix with bold styling |
 
-### 7. Auto-refresh
+### 10. Log Viewing
+
+| Test | Steps | Expected Result |
+|------|-------|-----------------|
+| View logs | Select any service | Detail pane shows last 50 lines of logs |
+| Follow mode | Press `f` | Shows "[FOLLOWING - Press f to stop]", logs update live |
+| Stop follow | Press `f` again | Stops following, shows static logs |
+
+### 11. Grouping
+
+| Test | Steps | Expected Result |
+|------|-------|-----------------|
+| Cycle grouping | Press `g` | Groups: none → status → load → none |
+| Status grouping | Group by status | Services grouped under "Active", "Failed", "Inactive" headers |
+| Load grouping | Group by load | Services grouped under "Loaded", "Not Found", "Other" headers |
+
+### 12. Auto-refresh
 
 | Test | Steps | Expected Result |
 |------|-------|-----------------|
 | Polling | Wait 2+ seconds after action | List refreshes automatically |
 | External change | Change service state externally | TUI reflects change within 2 seconds |
 
-### 8. Error Handling
+### 13. Error Handling
 
 | Test | Steps | Expected Result |
 |------|-------|-----------------|
@@ -82,8 +134,11 @@ This document describes manual testing scenarios for the systemd TUI manager.
 | Stop failure | Try stopping already-stopped service | Error shown in status bar |
 | Log fetch error | Select service with no logs | "Log Error" message in detail pane |
 | Permission denied | Try action without permission | Specific error message displayed |
+| Duplicate service | Create service with existing name | Shows error "service already exists" |
+| Invalid name | Create service with "../" in name | Shows error "invalid service name" |
+| Newline injection | Create service with newline in description | Shows error "description contains newlines" |
 
-### 9. Edge Cases
+### 14. Edge Cases
 
 | Test | Steps | Expected Result |
 |------|-------|-----------------|
@@ -104,10 +159,61 @@ Current test coverage:
 - `internal/service`: JSON parsing, unit struct validation
 - `internal/ui`: Model initialization, confirmation state, error handling, window sizing
 
+## Testing Script
+
+Quick automated verification:
+
+```bash
+# Build
+go build -o systemd-tui ./cmd/systemd-tui
+
+# Run unit tests
+go test ./...
+
+# Check services available
+systemctl --user list-units --type=service --all | head -10
+
+# Verify user service directory exists
+ls ~/.config/systemd/user/
+
+# Create a test service manually to verify creation works
+cat > ~/.config/systemd/user/test-manual.service << 'EOF'
+[Unit]
+Description=Manual Test Service
+
+[Service]
+Type=simple
+ExecStart=/bin/sleep infinity
+
+[Install]
+WantedBy=default.target
+EOF
+
+# Reload and verify
+systemctl --user daemon-reload
+systemctl --user list-unit-files test-manual.service
+
+# Clean up
+rm ~/.config/systemd/user/test-manual.service
+systemctl --user daemon-reload
+```
+
 ## Known Limitations
 
-1. **Live log tailing**: Not yet implemented (logs are snapshot, not streaming)
-2. **System services**: Only user services (`--user`) are shown
-3. **Service grouping**: Not yet implemented (Phase 9)
-4. **Clipboard support**: Not yet implemented (Phase 9)
-5. **Config file**: Not yet implemented (Phase 9)
+1. **System services**: Only user services (`--user`) are shown
+2. **Terminal required**: Cannot run non-interactively (no `--help` flag)
+
+## Test Results Log
+
+### [Date: 2026-02-15]
+
+**Build Status**: ✅ Pass
+**Unit Tests**: ✅ Pass (internal/service, internal/ui)
+
+**Manual Testing**: _Pending user verification_
+
+Features to verify manually:
+- [ ] Service creation modal opens and creates services
+- [ ] Filter modes cycle correctly (F key)
+- [ ] Source indicators display properly (●/○)
+- [ ] Created services appear in "my services" filter mode
