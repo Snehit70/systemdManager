@@ -26,6 +26,17 @@ func (i item) Title() string       { return i.svc.Name }
 func (i item) Description() string { return i.svc.Description }
 func (i item) FilterValue() string { return i.svc.Name }
 
+func (m MainModel) getSelectedService() *client.Service {
+	selected := m.list.SelectedItem()
+	if selected == nil {
+		return nil
+	}
+	if it, ok := selected.(item); ok {
+		return &it.svc
+	}
+	return nil
+}
+
 type keyMap struct {
 	Up           key.Binding
 	Down         key.Binding
@@ -259,6 +270,7 @@ type MainModel struct {
 	statusMessage string
 	selectedSvc   string
 	activeView    int
+	ctx           context.Context
 
 	confirmingAction string
 	confirmingUnit   string
@@ -316,6 +328,7 @@ func NewMainModel(client client.ServiceClient, cfg *config.Config) MainModel {
 		activeBorder:   active,
 		inactiveBorder: inactive,
 		detailStyle:    lipgloss.NewStyle().PaddingLeft(1),
+		ctx:            context.Background(),
 	}
 }
 
@@ -420,8 +433,7 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.stopFollow()
 				m.statusMessage = "Stopped following logs"
 			} else {
-				if selected := m.list.SelectedItem(); selected != nil {
-					svc := selected.(item).svc
+				if svc := m.getSelectedService(); svc != nil {
 					cmd = m.startFollow(svc.Name)
 					m.statusMessage = "Following logs for " + svc.Name
 					return m, cmd
@@ -431,12 +443,12 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, keys.ToggleGroup):
 			m.groupMode = m.groupMode.Next()
 			m.statusMessage = fmt.Sprintf("Group by: %s", m.groupMode)
-			cmds = append(cmds, m.updateListItems())
+			cmds = append(cmds, m.list.SetItems(m.buildListItems()))
 
 		case key.Matches(msg, keys.ToggleSource):
 			m.filterMode = m.filterMode.Next()
 			m.statusMessage = fmt.Sprintf("Filter: %s", m.filterMode)
-			cmds = append(cmds, m.updateListItems())
+			cmds = append(cmds, m.list.SetItems(m.buildListItems()))
 
 		case key.Matches(msg, keys.Create):
 			m.showCreate = true
@@ -447,43 +459,37 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.activeView == listView {
 			switch {
 			case key.Matches(msg, keys.Restart):
-				if selected := m.list.SelectedItem(); selected != nil {
-					svc := selected.(item).svc
+				if svc := m.getSelectedService(); svc != nil {
 					m.confirmingAction = "restart"
 					m.confirmingUnit = svc.Name
 					m.statusMessage = fmt.Sprintf("Restart %s? (y/n)", svc.Name)
 					return m, nil
 				}
 			case key.Matches(msg, keys.Start):
-				if selected := m.list.SelectedItem(); selected != nil {
-					svc := selected.(item).svc
+				if svc := m.getSelectedService(); svc != nil {
 					m.statusMessage = "Starting " + svc.Name + "..."
 					return m, m.startService(svc.Name)
 				}
 			case key.Matches(msg, keys.Stop):
-				if selected := m.list.SelectedItem(); selected != nil {
-					svc := selected.(item).svc
+				if svc := m.getSelectedService(); svc != nil {
 					m.confirmingAction = "stop"
 					m.confirmingUnit = svc.Name
 					m.statusMessage = fmt.Sprintf("Stop %s? (y/n)", svc.Name)
 					return m, nil
 				}
 			case key.Matches(msg, keys.Edit):
-				if selected := m.list.SelectedItem(); selected != nil {
-					svc := selected.(item).svc
+				if svc := m.getSelectedService(); svc != nil {
 					return m, m.editService(svc.Name)
 				}
 			case key.Matches(msg, keys.Enable):
-				if selected := m.list.SelectedItem(); selected != nil {
-					svc := selected.(item).svc
+				if svc := m.getSelectedService(); svc != nil {
 					m.confirmingAction = "enable"
 					m.confirmingUnit = svc.Name
 					m.statusMessage = fmt.Sprintf("Enable %s? (y/n)", svc.Name)
 					return m, nil
 				}
 			case key.Matches(msg, keys.Disable):
-				if selected := m.list.SelectedItem(); selected != nil {
-					svc := selected.(item).svc
+				if svc := m.getSelectedService(); svc != nil {
 					m.confirmingAction = "disable"
 					m.confirmingUnit = svc.Name
 					m.statusMessage = fmt.Sprintf("Disable %s? (y/n)", svc.Name)
@@ -498,10 +504,9 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.list, cmd = m.list.Update(msg)
 				cmds = append(cmds, cmd)
 
-				if m.list.SelectedItem() != nil {
+				if svc := m.getSelectedService(); svc != nil {
 					currItem := m.list.SelectedItem()
 					if prevItem == nil || currItem.FilterValue() != prevItem.FilterValue() {
-						svc := currItem.(item).svc
 						m.selectedSvc = svc.Name
 						cmds = append(cmds, m.fetchLogs(svc.Name))
 					}
@@ -522,10 +527,10 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.statusMessage = fmt.Sprintf("Loaded %d services (%d user-created)", len(msg), userCount)
 
-		cmds = append(cmds, m.updateListItems())
+		items := m.buildListItems()
+		cmds = append(cmds, m.list.SetItems(items))
 
-		if m.list.SelectedItem() != nil {
-			svc := m.list.SelectedItem().(item).svc
+		if svc := m.getSelectedService(); svc != nil {
 			cmds = append(cmds, m.fetchLogs(svc.Name))
 		}
 
@@ -541,7 +546,7 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.statusMessage = "Edit failed: " + msg.err.Error()
 		} else {
-			if err := m.client.ReloadDaemon(); err != nil {
+			if err := m.client.ReloadDaemon(m.ctx); err != nil {
 				m.statusMessage = "Edit saved, but reload failed: " + err.Error()
 			} else {
 				m.statusMessage = "Edit saved. Reloaded daemon."
@@ -552,9 +557,7 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case logMsg:
 		if msg.unit == m.selectedSvc && !m.following {
-			selectedItem := m.list.SelectedItem()
-			if selectedItem != nil {
-				svc := selectedItem.(item).svc
+			if svc := m.getSelectedService(); svc != nil {
 				lines := m.config.General.LogLines
 				if lines <= 0 {
 					lines = 50
@@ -582,9 +585,7 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(m.followLogLines) > maxLines {
 				m.followLogLines = m.followLogLines[len(m.followLogLines)-maxLines:]
 			}
-			selectedItem := m.list.SelectedItem()
-			if selectedItem != nil {
-				svc := selectedItem.(item).svc
+			if svc := m.getSelectedService(); svc != nil {
 				content := fmt.Sprintf(
 					"Service: %s\nStatus: %s (%s)\nDescription: %s\n\n[FOLLOWING - Press f to stop]\n%s",
 					svc.Name, svc.Status, svc.Sub, svc.Description,
@@ -596,7 +597,7 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case errMsg:
-		m.statusMessage = fmt.Sprintf("Error: %s - %s", msg.context, msg.err.Error())
+		m.statusMessage = fmt.Sprintf("Error: %s - %s", msg.op, msg.err.Error())
 
 	case tickMsg:
 		// Don't refresh while filtering - it would reset the filter
@@ -727,16 +728,16 @@ func (m MainModel) renderCreateModal(baseView string) string {
 }
 
 func (m MainModel) fetchServices() tea.Msg {
-	services, err := m.client.ListServices()
+	services, err := m.client.ListServices(m.ctx)
 	if err != nil {
-		return errMsg{context: "Failed to list services", err: err}
+		return errMsg{op: "Failed to list services", err: err}
 	}
 	return services
 }
 
 type errMsg struct {
-	context string
-	err     error
+	op  string
+	err error
 }
 
 func (e errMsg) Error() string { return e.err.Error() }
@@ -768,48 +769,48 @@ func (m MainModel) fetchLogs(unit string) tea.Cmd {
 		if lines <= 0 {
 			lines = 50
 		}
-		logs, err := m.client.GetLogs(unit, client.LogOptions{Lines: lines})
+		logs, err := m.client.GetLogs(m.ctx, unit, client.LogOptions{Lines: lines})
 		return logMsg{unit: unit, logs: logs, err: err}
 	}
 }
 
 func (m MainModel) startService(unit string) tea.Cmd {
 	return func() tea.Msg {
-		err := m.client.StartService(unit)
+		err := m.client.StartService(m.ctx, unit)
 		return actionResultMsg{message: "Started " + unit, err: err}
 	}
 }
 
 func (m MainModel) stopService(unit string) tea.Cmd {
 	return func() tea.Msg {
-		err := m.client.StopService(unit)
+		err := m.client.StopService(m.ctx, unit)
 		return actionResultMsg{message: "Stopped " + unit, err: err}
 	}
 }
 
 func (m MainModel) restartService(unit string) tea.Cmd {
 	return func() tea.Msg {
-		err := m.client.RestartService(unit)
+		err := m.client.RestartService(m.ctx, unit)
 		return actionResultMsg{message: "Restarted " + unit, err: err}
 	}
 }
 
 func (m MainModel) enableService(unit string) tea.Cmd {
 	return func() tea.Msg {
-		err := m.client.EnableService(unit)
+		err := m.client.EnableService(m.ctx, unit)
 		return actionResultMsg{message: "Enabled " + unit, err: err}
 	}
 }
 
 func (m MainModel) disableService(unit string) tea.Cmd {
 	return func() tea.Msg {
-		err := m.client.DisableService(unit)
+		err := m.client.DisableService(m.ctx, unit)
 		return actionResultMsg{message: "Disabled " + unit, err: err}
 	}
 }
 
 func (m MainModel) editService(unit string) tea.Cmd {
-	cmd, err := m.client.EditService(unit)
+	cmd, err := m.client.EditService(m.ctx, unit)
 	if err != nil {
 		return func() tea.Msg {
 			return editorFinishedMsg{err: err}
@@ -824,10 +825,10 @@ func (m MainModel) editService(unit string) tea.Cmd {
 }
 
 func (m *MainModel) startFollow(unit string) tea.Cmd {
-	logChan, cancel, err := m.client.FollowLogs(unit, client.LogOptions{Lines: 50})
+	logChan, cancel, err := m.client.FollowLogs(m.ctx, unit, client.LogOptions{Lines: 50})
 	if err != nil {
 		return func() tea.Msg {
-			return errMsg{context: "Failed to follow logs", err: err}
+			return errMsg{op: "Failed to follow logs", err: err}
 		}
 	}
 
@@ -852,7 +853,7 @@ func (m *MainModel) stopFollow() {
 	m.followLogLines = nil
 }
 
-func (m MainModel) updateListItems() tea.Cmd {
+func (m MainModel) buildListItems() []list.Item {
 	var items []list.Item
 
 	switch m.groupMode {
@@ -866,7 +867,7 @@ func (m MainModel) updateListItems() tea.Cmd {
 		}
 	}
 
-	return m.list.SetItems(items)
+	return items
 }
 
 type groupHeaderItem struct {
@@ -1059,7 +1060,7 @@ func (m MainModel) createServiceFromModal() (tea.Model, tea.Cmd) {
 		Restart:          m.createModal.restart,
 	}
 
-	err := m.client.CreateService(tmpl)
+	err := m.client.CreateService(m.ctx, tmpl)
 	if err != nil {
 		m.statusMessage = "Failed to create service: " + err.Error()
 		return m, nil

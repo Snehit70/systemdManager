@@ -13,6 +13,9 @@ import (
 	"systemd-tui/internal/client"
 )
 
+// Compile-time interface verification
+var _ client.ServiceClient = (*systemdClient)(nil)
+
 type systemdClient struct {
 	editor        string
 	userConfigDir string
@@ -27,14 +30,14 @@ func NewSystemdClient(cfg interface{ GetEditor() string }) client.ServiceClient 
 	return &systemdClient{editor: editor, userConfigDir: userConfigDir}
 }
 
-func (c *systemdClient) ListServices() ([]client.Service, error) {
-	units, err := c.listUnits()
+func (c *systemdClient) ListServices(ctx context.Context) ([]client.Service, error) {
+	units, err := c.listUnits(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	unitFileStates := make(map[string]string)
-	unitFiles, err := c.listUnitFiles()
+	unitFiles, err := c.listUnitFiles(ctx)
 	if err == nil {
 		for _, uf := range unitFiles {
 			unitFileStates[uf.UnitFile] = uf.State
@@ -49,8 +52,8 @@ func (c *systemdClient) ListServices() ([]client.Service, error) {
 	return services, nil
 }
 
-func (c *systemdClient) listUnits() ([]Unit, error) {
-	cmd := exec.Command("systemctl", "--user", "list-units", "--type=service", "--all", "--output=json")
+func (c *systemdClient) listUnits(ctx context.Context) ([]Unit, error) {
+	cmd := exec.CommandContext(ctx, "systemctl", "--user", "list-units", "--type=service", "--all", "--output=json")
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("failed to run systemctl: %w", err)
@@ -64,8 +67,8 @@ func (c *systemdClient) listUnits() ([]Unit, error) {
 	return units, nil
 }
 
-func (c *systemdClient) listUnitFiles() ([]UnitFile, error) {
-	cmd := exec.Command("systemctl", "--user", "list-unit-files", "--type=service", "--output=json")
+func (c *systemdClient) listUnitFiles(ctx context.Context) ([]UnitFile, error) {
+	cmd := exec.CommandContext(ctx, "systemctl", "--user", "list-unit-files", "--type=service", "--output=json")
 	output, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("failed to run systemctl list-unit-files: %w", err)
@@ -79,38 +82,38 @@ func (c *systemdClient) listUnitFiles() ([]UnitFile, error) {
 	return unitFiles, nil
 }
 
-func (c *systemdClient) StartService(name string) error {
-	return c.runAction("start", name)
+func (c *systemdClient) StartService(ctx context.Context, name string) error {
+	return c.runAction(ctx, "start", name)
 }
 
-func (c *systemdClient) StopService(name string) error {
-	return c.runAction("stop", name)
+func (c *systemdClient) StopService(ctx context.Context, name string) error {
+	return c.runAction(ctx, "stop", name)
 }
 
-func (c *systemdClient) RestartService(name string) error {
-	return c.runAction("restart", name)
+func (c *systemdClient) RestartService(ctx context.Context, name string) error {
+	return c.runAction(ctx, "restart", name)
 }
 
-func (c *systemdClient) EnableService(name string) error {
-	return c.runAction("enable", name)
+func (c *systemdClient) EnableService(ctx context.Context, name string) error {
+	return c.runAction(ctx, "enable", name)
 }
 
-func (c *systemdClient) DisableService(name string) error {
-	return c.runAction("disable", name)
+func (c *systemdClient) DisableService(ctx context.Context, name string) error {
+	return c.runAction(ctx, "disable", name)
 }
 
-func (c *systemdClient) GetStatus(name string) (client.ServiceStatus, error) {
-	cmd := exec.Command("systemctl", "--user", "show", name, "--property=ActiveState", "--value")
+func (c *systemdClient) GetStatus(ctx context.Context, name string) (client.ServiceStatus, error) {
+	cmd := exec.CommandContext(ctx, "systemctl", "--user", "show", name, "--property=ActiveState", "--value")
 	output, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("failed to get status: %w", err)
+		return "", fmt.Errorf("failed to get status for %s: %w", name, err)
 	}
 
 	state := client.ServiceStatus(strings.TrimSpace(string(output)))
 	return state, nil
 }
 
-func (c *systemdClient) GetLogs(name string, opts client.LogOptions) (string, error) {
+func (c *systemdClient) GetLogs(ctx context.Context, name string, opts client.LogOptions) (string, error) {
 	lines := opts.Lines
 	if lines <= 0 {
 		lines = 50
@@ -121,33 +124,33 @@ func (c *systemdClient) GetLogs(name string, opts client.LogOptions) (string, er
 		return "", fmt.Errorf("follow mode not yet supported")
 	}
 
-	cmd := exec.Command("journalctl", args...)
+	cmd := exec.CommandContext(ctx, "journalctl", args...)
 	output, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("failed to get logs: %w", err)
+		return "", fmt.Errorf("failed to get logs for %s: %w", name, err)
 	}
 
 	return string(output), nil
 }
 
-func (c *systemdClient) FollowLogs(name string, opts client.LogOptions) (<-chan string, context.CancelFunc, error) {
+func (c *systemdClient) FollowLogs(ctx context.Context, name string, opts client.LogOptions) (<-chan string, context.CancelFunc, error) {
 	lines := opts.Lines
 	if lines <= 0 {
 		lines = 50
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	cmd := exec.CommandContext(ctx, "journalctl", "--user", "-u", name, "-n", fmt.Sprintf("%d", lines), "-f", "--no-pager")
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		cancel()
-		return nil, nil, fmt.Errorf("failed to create pipe: %w", err)
+		return nil, nil, fmt.Errorf("failed to create pipe for %s: %w", name, err)
 	}
 
 	if err := cmd.Start(); err != nil {
 		cancel()
-		return nil, nil, fmt.Errorf("failed to start journalctl: %w", err)
+		return nil, nil, fmt.Errorf("failed to start journalctl for %s: %w", name, err)
 	}
 
 	logChan := make(chan string, 100)
@@ -169,17 +172,17 @@ func (c *systemdClient) FollowLogs(name string, opts client.LogOptions) (<-chan 
 	return logChan, cancel, nil
 }
 
-func (c *systemdClient) GetConfig(name string) (string, error) {
-	cmd := exec.Command("systemctl", "--user", "cat", name)
+func (c *systemdClient) GetConfig(ctx context.Context, name string) (string, error) {
+	cmd := exec.CommandContext(ctx, "systemctl", "--user", "cat", name)
 	output, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("failed to get config: %w", err)
+		return "", fmt.Errorf("failed to get config for %s: %w", name, err)
 	}
 	return string(output), nil
 }
 
-func (c *systemdClient) EditService(name string) (*exec.Cmd, error) {
-	cmd := exec.Command("systemctl", "--user", "edit", "--full", name)
+func (c *systemdClient) EditService(ctx context.Context, name string) (*exec.Cmd, error) {
+	cmd := exec.CommandContext(ctx, "systemctl", "--user", "edit", "--full", name)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -188,16 +191,16 @@ func (c *systemdClient) EditService(name string) (*exec.Cmd, error) {
 	return cmd, nil
 }
 
-func (c *systemdClient) ReloadDaemon() error {
-	cmd := exec.Command("systemctl", "--user", "daemon-reload")
+func (c *systemdClient) ReloadDaemon(ctx context.Context) error {
+	cmd := exec.CommandContext(ctx, "systemctl", "--user", "daemon-reload")
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to daemon-reload: %w", err)
 	}
 	return nil
 }
 
-func (c *systemdClient) runAction(action, unit string) error {
-	cmd := exec.Command("systemctl", "--user", action, unit)
+func (c *systemdClient) runAction(ctx context.Context, action, unit string) error {
+	cmd := exec.CommandContext(ctx, "systemctl", "--user", action, unit)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to %s %s: %w", action, unit, err)
 	}
@@ -241,8 +244,7 @@ func (c *systemdClient) determineSource(unitName, state string) client.ServiceSo
 	}
 }
 
-func (c *systemdClient) CreateService(tmpl client.ServiceTemplate) error {
-	// Validate and sanitize service name
+func (c *systemdClient) CreateService(ctx context.Context, tmpl client.ServiceTemplate) error {
 	tmpl.Name = c.sanitizeServiceName(tmpl.Name)
 	if tmpl.Name == "" {
 		return fmt.Errorf("invalid service name")
@@ -259,14 +261,12 @@ func (c *systemdClient) CreateService(tmpl client.ServiceTemplate) error {
 
 	servicePath := filepath.Join(serviceDir, tmpl.Name)
 
-	// Sanitize template fields
 	if err := c.sanitizeTemplate(&tmpl); err != nil {
 		return fmt.Errorf("invalid template: %w", err)
 	}
 
 	content := c.generateServiceFile(tmpl)
 
-	// Use atomic file creation with O_EXCL to prevent race conditions
 	file, err := os.OpenFile(servicePath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
 	if err != nil {
 		if os.IsExist(err) {
@@ -280,7 +280,7 @@ func (c *systemdClient) CreateService(tmpl client.ServiceTemplate) error {
 		return fmt.Errorf("failed to write service file: %w", err)
 	}
 
-	return c.ReloadDaemon()
+	return c.ReloadDaemon(ctx)
 }
 
 func (c *systemdClient) generateServiceFile(tmpl client.ServiceTemplate) string {

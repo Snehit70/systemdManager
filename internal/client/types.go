@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// ServiceStatus represents the current state of a service
+// ServiceStatus represents the current state of a service.
 type ServiceStatus string
 
 const (
@@ -18,7 +18,7 @@ const (
 	StatusReloading    ServiceStatus = "reloading"
 )
 
-// ServiceSource indicates where a service unit file originates from
+// ServiceSource indicates where a service unit file originates from.
 type ServiceSource string
 
 const (
@@ -30,7 +30,7 @@ const (
 	SourceUnknown   ServiceSource = "unknown"   // Unable to determine
 )
 
-// Service represents a managed systemd service
+// Service represents a managed systemd service.
 type Service struct {
 	Name        string
 	Description string
@@ -45,14 +45,14 @@ type Service struct {
 	Since       time.Time     // When service entered current status
 }
 
-// LogOptions controls log retrieval behavior
+// LogOptions controls log retrieval behavior.
 type LogOptions struct {
 	Lines  int    // Number of lines to fetch (default: 50)
 	Follow bool   // Whether to follow/stay attached (live tailing)
 	Filter string // Optional log level or text filter
 }
 
-// ServiceTemplate defines parameters for creating a new service
+// ServiceTemplate defines parameters for creating a new service.
 type ServiceTemplate struct {
 	Name             string
 	Description      string
@@ -62,31 +62,32 @@ type ServiceTemplate struct {
 	Restart          string // on-failure, always, no
 }
 
-// ServiceClient defines the interface for service management backends
+// ServiceClient defines the interface for service management backends.
+// All blocking operations accept context.Context for cancellation support.
 type ServiceClient interface {
-	// List all available services
-	ListServices() ([]Service, error)
+	// ListServices retrieves all available services.
+	ListServices(ctx context.Context) ([]Service, error)
 
 	// Service lifecycle actions
-	StartService(name string) error
-	StopService(name string) error
-	RestartService(name string) error
-	EnableService(name string) error
-	DisableService(name string) error
+	StartService(ctx context.Context, name string) error
+	StopService(ctx context.Context, name string) error
+	RestartService(ctx context.Context, name string) error
+	EnableService(ctx context.Context, name string) error
+	DisableService(ctx context.Context, name string) error
 
 	// Service information
-	GetStatus(name string) (ServiceStatus, error)
-	GetLogs(name string, opts LogOptions) (string, error)
-	GetConfig(name string) (string, error)
+	GetStatus(ctx context.Context, name string) (ServiceStatus, error)
+	GetLogs(ctx context.Context, name string, opts LogOptions) (string, error)
+	GetConfig(ctx context.Context, name string) (string, error)
 
-	// Streaming logs - returns a channel that emits log lines
-	// Call cancel() to stop the stream
-	FollowLogs(name string, opts LogOptions) (<-chan string, context.CancelFunc, error)
+	// FollowLogs returns a channel that emits log lines.
+	// Call the returned cancel function to stop the stream.
+	FollowLogs(ctx context.Context, name string, opts LogOptions) (<-chan string, context.CancelFunc, error)
 
 	// Service file management
-	EditService(name string) (*exec.Cmd, error)
-	ReloadDaemon() error
+	EditService(ctx context.Context, name string) (*exec.Cmd, error)
+	ReloadDaemon(ctx context.Context) error
 
 	// Service creation
-	CreateService(template ServiceTemplate) error
+	CreateService(ctx context.Context, template ServiceTemplate) error
 }

@@ -9,18 +9,21 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Config holds all application configuration.
 type Config struct {
 	General GeneralConfig       `yaml:"general"`
 	UI      UIConfig            `yaml:"ui"`
 	Groups  map[string][]string `yaml:"groups"`
 }
 
+// GeneralConfig holds general application settings.
 type GeneralConfig struct {
 	RefreshInterval time.Duration `yaml:"refresh_interval"`
 	LogLines        int           `yaml:"log_lines"`
 	Editor          string        `yaml:"editor"`
 }
 
+// UIConfig holds UI-related settings.
 type UIConfig struct {
 	Theme        string `yaml:"theme"`
 	ReduceMotion bool   `yaml:"reduce_motion"`
@@ -137,6 +140,7 @@ type ThemeColors struct {
 	StatusInactive string
 }
 
+// DarkTheme provides a dark color scheme optimized for terminal use.
 var DarkTheme = ThemeColors{
 	Background:     "#1A1A2E",
 	Surface:        "#16213E",
@@ -149,6 +153,7 @@ var DarkTheme = ThemeColors{
 	StatusInactive: "#666666",
 }
 
+// LightTheme provides a light color scheme for bright environments.
 var LightTheme = ThemeColors{
 	Background:     "#FAFAFA",
 	Surface:        "#FFFFFF",
@@ -161,6 +166,7 @@ var LightTheme = ThemeColors{
 	StatusInactive: "#757575",
 }
 
+// HighContrastTheme provides a high contrast color scheme for accessibility.
 var HighContrastTheme = ThemeColors{
 	Background:     "#000000",
 	Surface:        "#1A1A1A",

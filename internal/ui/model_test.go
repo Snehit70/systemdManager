@@ -11,40 +11,43 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// mockServiceClient implements client.ServiceClient for testing
+var _ client.ServiceClient = (*mockServiceClient)(nil)
+
 type mockServiceClient struct {
 	services []client.Service
 }
 
-func (m *mockServiceClient) ListServices() ([]client.Service, error) {
+func (m *mockServiceClient) ListServices(ctx context.Context) ([]client.Service, error) {
 	return m.services, nil
 }
 
-func (m *mockServiceClient) StartService(name string) error   { return nil }
-func (m *mockServiceClient) StopService(name string) error    { return nil }
-func (m *mockServiceClient) RestartService(name string) error { return nil }
-func (m *mockServiceClient) EnableService(name string) error  { return nil }
-func (m *mockServiceClient) DisableService(name string) error { return nil }
-func (m *mockServiceClient) GetStatus(name string) (client.ServiceStatus, error) {
+func (m *mockServiceClient) StartService(ctx context.Context, name string) error   { return nil }
+func (m *mockServiceClient) StopService(ctx context.Context, name string) error    { return nil }
+func (m *mockServiceClient) RestartService(ctx context.Context, name string) error { return nil }
+func (m *mockServiceClient) EnableService(ctx context.Context, name string) error  { return nil }
+func (m *mockServiceClient) DisableService(ctx context.Context, name string) error { return nil }
+func (m *mockServiceClient) GetStatus(ctx context.Context, name string) (client.ServiceStatus, error) {
 	return "active", nil
 }
-func (m *mockServiceClient) GetLogs(name string, opts client.LogOptions) (string, error) {
+func (m *mockServiceClient) GetLogs(ctx context.Context, name string, opts client.LogOptions) (string, error) {
 	return "Mock logs", nil
 }
-func (m *mockServiceClient) GetConfig(name string) (string, error) {
+func (m *mockServiceClient) GetConfig(ctx context.Context, name string) (string, error) {
 	return "[Service]", nil
 }
-func (m *mockServiceClient) EditService(name string) (*exec.Cmd, error) {
+func (m *mockServiceClient) EditService(ctx context.Context, name string) (*exec.Cmd, error) {
 	cmd := exec.Command("true")
 	return cmd, nil
 }
-func (m *mockServiceClient) ReloadDaemon() error { return nil }
-func (m *mockServiceClient) FollowLogs(name string, opts client.LogOptions) (<-chan string, context.CancelFunc, error) {
+func (m *mockServiceClient) ReloadDaemon(ctx context.Context) error { return nil }
+func (m *mockServiceClient) FollowLogs(ctx context.Context, name string, opts client.LogOptions) (<-chan string, context.CancelFunc, error) {
 	ch := make(chan string)
 	cancel := func() { close(ch) }
 	return ch, cancel, nil
 }
-func (m *mockServiceClient) CreateService(tmpl client.ServiceTemplate) error { return nil }
+func (m *mockServiceClient) CreateService(ctx context.Context, tmpl client.ServiceTemplate) error {
+	return nil
+}
 
 func newTestModel() MainModel {
 	return NewMainModel(&mockServiceClient{}, config.Default())
@@ -108,7 +111,7 @@ func TestErrorMessageHandling(t *testing.T) {
 	model := newTestModel()
 
 	testErr := errors.New("test error")
-	errMsg := errMsg{context: "Test", err: testErr}
+	errMsg := errMsg{op: "Test", err: testErr}
 
 	updatedModel, _ := model.Update(errMsg)
 	m := updatedModel.(MainModel)
@@ -167,5 +170,42 @@ func TestViewSwitching(t *testing.T) {
 	model.activeView = listView
 	if model.activeView != listView {
 		t.Errorf("Expected listView after switch back")
+	}
+}
+
+func TestServiceLoadingPopulatesList(t *testing.T) {
+	mockClient := &mockServiceClient{
+		services: []client.Service{
+			{Name: "test1.service", Description: "Test 1", Status: client.StatusActive, Source: client.SourceUser},
+			{Name: "test2.service", Description: "Test 2", Status: client.StatusInactive, Source: client.SourceSystem},
+		},
+	}
+	model := NewMainModel(mockClient, config.Default())
+
+	// Simulate window size first (like real app)
+	sizeMsg := tea.WindowSizeMsg{Width: 100, Height: 40}
+	updatedModel, _ := model.Update(sizeMsg)
+	m := updatedModel.(MainModel)
+
+	// Simulate services being loaded
+	servicesMsg := []client.Service{
+		{Name: "test1.service", Description: "Test 1", Status: client.StatusActive, Source: client.SourceUser},
+		{Name: "test2.service", Description: "Test 2", Status: client.StatusInactive, Source: client.SourceSystem},
+	}
+	updatedModel, _ = m.Update(servicesMsg)
+	m = updatedModel.(MainModel)
+
+	if len(m.services) != 2 {
+		t.Errorf("Expected 2 services, got %d", len(m.services))
+	}
+
+	items := m.list.Items()
+	if len(items) != 2 {
+		t.Errorf("Expected 2 list items, got %d", len(items))
+	}
+
+	// Verify status message
+	if m.statusMessage != "Loaded 2 services (1 user-created)" {
+		t.Errorf("Expected 'Loaded 2 services (1 user-created)', got '%s'", m.statusMessage)
 	}
 }
