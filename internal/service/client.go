@@ -181,6 +181,18 @@ func (c *systemdClient) GetConfig(ctx context.Context, name string) (string, err
 	return string(output), nil
 }
 
+func (c *systemdClient) GetStatusDetails(ctx context.Context, name string) (string, error) {
+	cmd := exec.CommandContext(ctx, "systemctl", "--user", "status", name, "--no-pager")
+	output, err := cmd.Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return string(exitErr.Stderr), nil
+		}
+		return "", fmt.Errorf("failed to get status details for %s: %w", name, err)
+	}
+	return string(output), nil
+}
+
 func (c *systemdClient) EditService(ctx context.Context, name string) (*exec.Cmd, error) {
 	cmd := exec.CommandContext(ctx, "systemctl", "--user", "edit", "--full", name)
 	cmd.Stdin = os.Stdin
@@ -202,13 +214,13 @@ func (c *systemdClient) ReloadDaemon(ctx context.Context) error {
 func (c *systemdClient) runAction(ctx context.Context, action, unit string) error {
 	cmd := exec.CommandContext(ctx, "systemctl", "--user", action, unit)
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to %s %s: %w", action, unit, err)
+		return client.NewServiceError(action, unit, err)
 	}
 	return nil
 }
 
 func (c *systemdClient) unitToService(u Unit, state string) client.Service {
-	enabled := u.Load == "loaded" && (u.Active == "active" || strings.Contains(u.Sub, "enabled"))
+	enabled := isUnitFileEnabled(state)
 	source := c.determineSource(u.Unit, state)
 
 	return client.Service{
@@ -219,6 +231,15 @@ func (c *systemdClient) unitToService(u Unit, state string) client.Service {
 		Enabled:     enabled,
 		Load:        u.Load,
 		Source:      source,
+	}
+}
+
+func isUnitFileEnabled(state string) bool {
+	switch state {
+	case "enabled", "enabled-runtime", "static", "indirect", "generated":
+		return true
+	default:
+		return false
 	}
 }
 

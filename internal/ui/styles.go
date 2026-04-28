@@ -7,12 +7,18 @@ import (
 )
 
 var (
-	ActiveStyle      lipgloss.Style
-	FailedStyle      lipgloss.Style
-	InactiveStyle    lipgloss.Style
-	DegradedStyle    lipgloss.Style
-	SelectedStyle    lipgloss.Style
-	DescriptionStyle lipgloss.Style
+	ActiveStyle          lipgloss.Style
+	FailedStyle          lipgloss.Style
+	InactiveStyle        lipgloss.Style
+	DegradedStyle        lipgloss.Style
+	SelectedStyle        lipgloss.Style
+	DescriptionStyle     lipgloss.Style
+	SourceUserStyle      lipgloss.Style
+	SourceSystemStyle    lipgloss.Style
+	SourceTransientStyle lipgloss.Style
+	SourceGeneratedStyle lipgloss.Style
+	SourceStaticStyle    lipgloss.Style
+	SourceOtherStyle     lipgloss.Style
 )
 
 func ApplyTheme(theme config.ThemeColors) {
@@ -34,6 +40,19 @@ func ApplyTheme(theme config.ThemeColors) {
 
 	DescriptionStyle = lipgloss.NewStyle().
 		Foreground(lipgloss.Color(theme.TextMuted))
+
+	SourceUserStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.SourceUser))
+	SourceSystemStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.SourceSystem))
+	SourceTransientStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.SourceTransient))
+	SourceGeneratedStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.SourceGenerated))
+	SourceStaticStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.SourceStatic))
+	SourceOtherStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.SourceStatic))
 }
 
 func init() {
@@ -50,5 +69,16 @@ func GetStatusStyle(activeState string) lipgloss.Style {
 		return DegradedStyle
 	default:
 		return InactiveStyle
+	}
+}
+
+func GetSourceStyle(source string) lipgloss.Style {
+	switch source {
+	case "user":
+		return SourceUserStyle
+	case "system":
+		return SourceSystemStyle
+	default:
+		return SourceOtherStyle
 	}
 }

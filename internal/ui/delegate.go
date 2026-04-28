@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 )
 
 // itemDelegate implements list.DefaultDelegate for custom service item rendering.
@@ -34,18 +35,19 @@ func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list
 
 	statusStyle := GetStatusStyle(string(i.svc.Status))
 	sourceIndicator := sourceIndicator(i.svc.Source)
+	sourceStyling := sourceStyle(i.svc.Source)
+	styledIndicator := sourceStyling.Render(sourceIndicator)
+
+	name := truncateName(i.svc.Name, 35)
 
 	var str string
 	if index == m.Index() {
-		str = SelectedStyle.Render("> " + sourceIndicator + " " + statusStyle.Render(i.svc.Name))
+		str = SelectedStyle.Render("> " + styledIndicator + " " + statusStyle.Render(name))
 	} else {
-		str = "  " + sourceIndicator + " " + statusStyle.Render(i.svc.Name)
+		str = "  " + styledIndicator + " " + statusStyle.Render(name)
 	}
 
-	desc := i.svc.Description
-	if len(desc) > 50 {
-		desc = desc[:47] + "..."
-	}
+	desc := truncateDescription(i.svc.Description, 50)
 	descStyle := DescriptionStyle
 
 	if i.svc.Status == "failed" {
@@ -57,14 +59,74 @@ func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list
 	fmt.Fprint(w, str)
 }
 
+func truncateName(name string, maxWidth int) string {
+	prefix := "  "
+	indicator := " "
+	availableWidth := maxWidth - runewidth.StringWidth(prefix) - runewidth.StringWidth(indicator)
+
+	currentWidth := runewidth.StringWidth(name)
+	if currentWidth <= availableWidth {
+		return name
+	}
+
+	serviceSuffix := ".service"
+	suffixWidth := runewidth.StringWidth(serviceSuffix)
+
+	if suffixWidth < currentWidth && currentWidth-suffixWidth <= availableWidth {
+		truncated := name[:len(name)-len(serviceSuffix)]
+		for runewidth.StringWidth(truncated)+suffixWidth > availableWidth && len(truncated) > 0 {
+			truncated = truncated[:len(truncated)-1]
+		}
+		return truncated + serviceSuffix
+	}
+
+	for runewidth.StringWidth(name) > availableWidth && len(name) > 0 {
+		name = name[:len(name)-1]
+	}
+	return name + "…"
+}
+
+func truncateDescription(desc string, maxLen int) string {
+	if runewidth.StringWidth(desc) <= maxLen {
+		return desc
+	}
+	for runewidth.StringWidth(desc) > maxLen && len(desc) > 0 {
+		desc = desc[:len(desc)-1]
+	}
+	return desc + "…"
+}
+
 // sourceIndicator returns a visual indicator for the service source type.
 func sourceIndicator(source client.ServiceSource) string {
 	switch source {
 	case client.SourceUser:
 		return "●"
-	case client.SourceSystem, client.SourceGenerated, client.SourceTransient, client.SourceStatic:
+	case client.SourceSystem:
 		return "○"
+	case client.SourceTransient:
+		return "◌"
+	case client.SourceGenerated:
+		return "◆"
+	case client.SourceStatic:
+		return "◇"
 	default:
 		return "·"
+	}
+}
+
+func sourceStyle(source client.ServiceSource) lipgloss.Style {
+	switch source {
+	case client.SourceUser:
+		return SourceUserStyle
+	case client.SourceSystem:
+		return SourceSystemStyle
+	case client.SourceTransient:
+		return SourceTransientStyle
+	case client.SourceGenerated:
+		return SourceGeneratedStyle
+	case client.SourceStatic:
+		return SourceStaticStyle
+	default:
+		return SourceOtherStyle
 	}
 }

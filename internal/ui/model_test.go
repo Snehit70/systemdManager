@@ -35,6 +35,9 @@ func (m *mockServiceClient) GetLogs(ctx context.Context, name string, opts clien
 func (m *mockServiceClient) GetConfig(ctx context.Context, name string) (string, error) {
 	return "[Service]", nil
 }
+func (m *mockServiceClient) GetStatusDetails(ctx context.Context, name string) (string, error) {
+	return "● test.service - Mock Status", nil
+}
 func (m *mockServiceClient) EditService(ctx context.Context, name string) (*exec.Cmd, error) {
 	cmd := exec.Command("true")
 	return cmd, nil
