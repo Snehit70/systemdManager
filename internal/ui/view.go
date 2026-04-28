@@ -8,7 +8,9 @@ import (
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func (m MainModel) View() string {
@@ -73,33 +75,47 @@ func (m MainModel) View() string {
 }
 
 func (m MainModel) renderModalLabel(label string, index int) string {
+	text := label + ":"
+	style := lipgloss.NewStyle().
+		Width(11).
+		Background(lipgloss.Color(m.theme.Surface)).
+		Bold(true)
 	if m.createModal.focusIndex == index {
-		return lipgloss.NewStyle().
+		return style.
 			Foreground(lipgloss.Color(m.theme.BorderActive)).
-			Bold(true).
-			Render(label)
+			Render(text)
 	}
-	return lipgloss.NewStyle().
+	return style.
 		Foreground(lipgloss.Color(m.theme.Text)).
-		Bold(true).
-		Render(label)
+		Render(text)
 }
 
 func (m MainModel) renderCreateModal(baseView string) string {
-	modalWidth := 60
-	modalHeight := 18
+	modalWidth := 68
+	if m.width > 0 && modalWidth > m.width-8 {
+		modalWidth = m.width - 8
+	}
+	if modalWidth < 48 {
+		modalWidth = 48
+	}
+	fieldWidth := modalWidth - 22
 
 	inputStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(m.theme.TextMuted))
 
-	var inputs []string
+	fieldStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(m.theme.Text)).
+		Background(lipgloss.Color(m.theme.Background)).
+		Padding(0, 1).
+		Width(fieldWidth)
 
-	inputs = append(inputs, fmt.Sprintf("%s %s", m.renderModalLabel("Name:", 0), m.createModal.nameInput.View()))
-	inputs = append(inputs, fmt.Sprintf("%s %s", m.renderModalLabel("Command:", 1), m.createModal.execInput.View()))
-	inputs = append(inputs, fmt.Sprintf("%s %s", m.renderModalLabel("Description:", 2), m.createModal.descInput.View()))
-	inputs = append(inputs, fmt.Sprintf("%s %s", m.renderModalLabel("Workdir:", 3), m.createModal.workdirInput.View()))
-	inputs = append(inputs, fmt.Sprintf("%s %s", m.renderModalLabel("Type:", 4), inputStyle.Render(m.createModal.serviceType+" (t to toggle)")))
-	inputs = append(inputs, fmt.Sprintf("%s %s", m.renderModalLabel("Restart:", 5), inputStyle.Render(m.createModal.restart+" (r to cycle)")))
+	var inputs []string
+	inputs = append(inputs, m.renderModalInput("Name", 0, m.createModal.nameInput, fieldStyle))
+	inputs = append(inputs, m.renderModalInput("Command", 1, m.createModal.execInput, fieldStyle))
+	inputs = append(inputs, m.renderModalInput("Description", 2, m.createModal.descInput, fieldStyle))
+	inputs = append(inputs, m.renderModalInput("Workdir", 3, m.createModal.workdirInput, fieldStyle))
+	inputs = append(inputs, m.renderModalStaticField("Type", 4, m.createModal.serviceType+"  (press t)", fieldStyle))
+	inputs = append(inputs, m.renderModalStaticField("Restart", 5, m.createModal.restart+"  (press r)", fieldStyle))
 
 	footer := "Tab: next • Shift+Tab: prev • Enter: create • Esc: cancel"
 	if m.creating {
@@ -108,11 +124,16 @@ func (m MainModel) renderCreateModal(baseView string) string {
 
 	content := lipgloss.NewStyle().
 		Width(modalWidth).
-		Height(modalHeight).
 		Padding(1, 2).
+		Background(lipgloss.Color(m.theme.Surface)).
 		Render(
 			lipgloss.JoinVertical(lipgloss.Left,
-				lipgloss.NewStyle().Bold(true).Render("Create New Service"),
+				lipgloss.NewStyle().
+					Foreground(lipgloss.Color(m.theme.Text)).
+					Background(lipgloss.Color(m.theme.Surface)).
+					Bold(true).
+					Render("Create New Service"),
+				inputStyle.Render("Creates a user unit in ~/.config/systemd/user/"),
 				"",
 				strings.Join(inputs, "\n"),
 				"",
@@ -126,13 +147,61 @@ func (m MainModel) renderCreateModal(baseView string) string {
 		Background(lipgloss.Color(m.theme.Surface)).
 		Render(content)
 
-	return lipgloss.Place(
-		m.width, m.height,
-		lipgloss.Center, lipgloss.Center,
-		modal,
-		lipgloss.WithWhitespaceChars(" "),
-		lipgloss.WithWhitespaceBackground(lipgloss.Color(m.theme.Background)),
-	)
+	return overlayCenter(baseView, modal, m.width, m.height)
+}
+
+func (m MainModel) renderModalInput(label string, index int, input textinput.Model, fieldStyle lipgloss.Style) string {
+	input.Width = fieldStyle.GetWidth() - 2
+	return fmt.Sprintf("%s %s", m.renderModalLabel(label, index), fieldStyle.Render(input.View()))
+}
+
+func (m MainModel) renderModalStaticField(label string, index int, value string, fieldStyle lipgloss.Style) string {
+	return fmt.Sprintf("%s %s", m.renderModalLabel(label, index), fieldStyle.Render(value))
+}
+
+func overlayCenter(base, modal string, width, height int) string {
+	if width <= 0 || height <= 0 {
+		return modal
+	}
+
+	baseLines := strings.Split(base, "\n")
+	for len(baseLines) < height {
+		baseLines = append(baseLines, "")
+	}
+
+	modalLines := strings.Split(modal, "\n")
+	modalWidth := 0
+	for _, line := range modalLines {
+		if lineWidth := ansi.StringWidth(line); lineWidth > modalWidth {
+			modalWidth = lineWidth
+		}
+	}
+	modalHeight := len(modalLines)
+	x := (width - modalWidth) / 2
+	y := (height - modalHeight) / 2
+	if x < 0 {
+		x = 0
+	}
+	if y < 0 {
+		y = 0
+	}
+
+	for i, modalLine := range modalLines {
+		target := y + i
+		if target < 0 || target >= len(baseLines) {
+			continue
+		}
+
+		line := baseLines[target]
+		left := ansi.Cut(line, 0, x)
+		right := ansi.Cut(line, x+modalWidth, width)
+		baseLines[target] = left + modalLine + right
+	}
+
+	if len(baseLines) > height {
+		baseLines = baseLines[:height]
+	}
+	return strings.Join(baseLines, "\n")
 }
 
 func (m *MainModel) viewportWithScrollInfo(content string) string {

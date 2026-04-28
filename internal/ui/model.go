@@ -238,19 +238,23 @@ type createModal struct {
 func newCreateModal() createModal {
 	name := textinput.New()
 	name.Placeholder = "my-service"
+	name.Prompt = ""
 	name.Focus()
 	name.CharLimit = 100
 
 	exec := textinput.New()
 	exec.Placeholder = "/path/to/command --args"
+	exec.Prompt = ""
 	exec.CharLimit = 500
 
 	desc := textinput.New()
 	desc.Placeholder = "Service description"
+	desc.Prompt = ""
 	desc.CharLimit = 200
 
 	workdir := textinput.New()
 	workdir.Placeholder = "~"
+	workdir.Prompt = ""
 	workdir.CharLimit = 200
 
 	return createModal{
