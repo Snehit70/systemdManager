@@ -17,6 +17,7 @@ type mockServiceClient struct {
 	services    []client.Service
 	createCalls int
 	createErr   error
+	followOpts  client.LogOptions
 }
 
 func (m *mockServiceClient) ListServices(ctx context.Context) ([]client.Service, error) {
@@ -46,6 +47,7 @@ func (m *mockServiceClient) EditService(ctx context.Context, name string) (*exec
 }
 func (m *mockServiceClient) ReloadDaemon(ctx context.Context) error { return nil }
 func (m *mockServiceClient) FollowLogs(ctx context.Context, name string, opts client.LogOptions) (<-chan string, context.CancelFunc, error) {
+	m.followOpts = opts
 	ch := make(chan string)
 	cancel := func() { close(ch) }
 	return ch, cancel, nil
@@ -253,5 +255,21 @@ func TestCreateServiceFromModalRunsAsync(t *testing.T) {
 	}
 	if m.statusMessage != "Created service: demo" {
 		t.Fatalf("unexpected status message: %q", m.statusMessage)
+	}
+}
+
+func TestStartFollowUsesConfiguredLogLines(t *testing.T) {
+	mockClient := &mockServiceClient{}
+	cfg := config.Default()
+	cfg.General.LogLines = 123
+	model := NewMainModel(mockClient, cfg)
+
+	cmd := model.startFollow("demo.service")
+
+	if cmd == nil {
+		t.Fatal("expected follow command")
+	}
+	if mockClient.followOpts.Lines != 123 {
+		t.Fatalf("expected configured log lines 123, got %d", mockClient.followOpts.Lines)
 	}
 }

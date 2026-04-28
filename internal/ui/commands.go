@@ -189,7 +189,11 @@ func (m MainModel) editService(unit string) tea.Cmd {
 // Follow mode lifecycle.
 
 func (m *MainModel) startFollow(unit string) tea.Cmd {
-	logChan, cancel, err := m.client.FollowLogs(m.ctx, unit, client.LogOptions{Lines: 50})
+	lines := m.config.General.LogLines
+	if lines <= 0 {
+		lines = 50
+	}
+	logChan, cancel, err := m.client.FollowLogs(m.ctx, unit, client.LogOptions{Lines: lines})
 	if err != nil {
 		return func() tea.Msg {
 			return errMsg{op: "Failed to follow logs", err: err}

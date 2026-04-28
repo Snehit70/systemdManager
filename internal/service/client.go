@@ -160,6 +160,7 @@ func (c *systemdClient) FollowLogs(ctx context.Context, name string, opts client
 		defer cmd.Wait()
 
 		scanner := bufio.NewScanner(stdout)
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		for scanner.Scan() {
 			select {
 			case logChan <- scanner.Text():
