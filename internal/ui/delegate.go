@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"systemd-tui/internal/client"
 
@@ -24,7 +25,7 @@ func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list
 		headerStyle := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("241")).
 			Bold(true)
-		fmt.Fprint(w, headerStyle.Render(header.title))
+		fmt.Fprint(w, headerStyle.Render(runewidth.Truncate(header.title, m.Width(), "…")))
 		return
 	}
 
@@ -38,7 +39,14 @@ func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list
 	sourceStyling := sourceStyle(i.svc.Source)
 	styledIndicator := sourceStyling.Render(sourceIndicator)
 
-	name := truncateName(i.svc.Name, 35)
+	rowWidth := m.Width()
+	if rowWidth <= 0 {
+		rowWidth = 40
+	}
+
+	prefixWidth := runewidth.StringWidth("> ")
+	indicatorWidth := runewidth.StringWidth(sourceIndicator + " ")
+	name := truncateServiceName(i.svc.Name, rowWidth-prefixWidth-indicatorWidth)
 
 	var str string
 	if index == m.Index() {
@@ -47,7 +55,7 @@ func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list
 		str = "  " + styledIndicator + " " + statusStyle.Render(name)
 	}
 
-	desc := truncateDescription(i.svc.Description, 50)
+	desc := truncateDescription(i.svc.Description, rowWidth-2)
 	descStyle := DescriptionStyle
 
 	if i.svc.Status == "failed" {
@@ -59,41 +67,34 @@ func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list
 	fmt.Fprint(w, str)
 }
 
-func truncateName(name string, maxWidth int) string {
-	prefix := "  "
-	indicator := " "
-	availableWidth := maxWidth - runewidth.StringWidth(prefix) - runewidth.StringWidth(indicator)
-
-	currentWidth := runewidth.StringWidth(name)
-	if currentWidth <= availableWidth {
+func truncateServiceName(name string, maxWidth int) string {
+	if maxWidth <= 0 {
+		return ""
+	}
+	if runewidth.StringWidth(name) <= maxWidth {
 		return name
 	}
 
 	serviceSuffix := ".service"
 	suffixWidth := runewidth.StringWidth(serviceSuffix)
 
-	if suffixWidth < currentWidth && currentWidth-suffixWidth <= availableWidth {
-		truncated := name[:len(name)-len(serviceSuffix)]
-		for runewidth.StringWidth(truncated)+suffixWidth > availableWidth && len(truncated) > 0 {
-			truncated = truncated[:len(truncated)-1]
-		}
-		return truncated + serviceSuffix
+	if strings.HasSuffix(name, serviceSuffix) && maxWidth > suffixWidth+1 {
+		base := strings.TrimSuffix(name, serviceSuffix)
+		truncatedBase := runewidth.Truncate(base, maxWidth-suffixWidth, "…")
+		return truncatedBase + serviceSuffix
 	}
 
-	for runewidth.StringWidth(name) > availableWidth && len(name) > 0 {
-		name = name[:len(name)-1]
-	}
-	return name + "…"
+	return runewidth.Truncate(name, maxWidth, "…")
 }
 
 func truncateDescription(desc string, maxLen int) string {
+	if maxLen <= 0 {
+		return ""
+	}
 	if runewidth.StringWidth(desc) <= maxLen {
 		return desc
 	}
-	for runewidth.StringWidth(desc) > maxLen && len(desc) > 0 {
-		desc = desc[:len(desc)-1]
-	}
-	return desc + "…"
+	return runewidth.Truncate(desc, maxLen, "…")
 }
 
 // sourceIndicator returns a visual indicator for the service source type.
