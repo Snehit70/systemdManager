@@ -72,7 +72,6 @@ func (k keyMap) FullHelp() [][]key.Binding {
 	}
 }
 
-
 var keys = keyMap{
 	Up: key.NewBinding(
 		key.WithKeys("up", "k"),
@@ -294,6 +293,7 @@ type MainModel struct {
 
 	createModal createModal
 	showCreate  bool
+	creating    bool
 
 	activeBorder   lipgloss.Style
 	inactiveBorder lipgloss.Style
@@ -602,6 +602,17 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.fetchServices)
 		}
 
+	case createServiceResultMsg:
+		m.creating = false
+		if msg.err != nil {
+			m.statusMessage = "Failed to create service: " + msg.err.Error()
+			m.showCreate = true
+		} else {
+			m.showCreate = false
+			m.statusMessage = fmt.Sprintf("Created service: %s", msg.name)
+			cmds = append(cmds, m.fetchServices)
+		}
+
 	case editorFinishedMsg:
 		if msg.err != nil {
 			m.statusMessage = "Edit failed: " + msg.err.Error()
@@ -692,7 +703,6 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	return m, tea.Batch(cmds...)
 }
-
 
 func (m MainModel) buildListItems() []list.Item {
 	var items []list.Item
@@ -895,8 +905,12 @@ func (m *MainModel) focusCreateInput() {
 }
 
 func (m MainModel) createServiceFromModal() (tea.Model, tea.Cmd) {
-	name := m.createModal.nameInput.Value()
-	exec := m.createModal.execInput.Value()
+	if m.creating {
+		return m, nil
+	}
+
+	name := strings.TrimSpace(m.createModal.nameInput.Value())
+	exec := strings.TrimSpace(m.createModal.execInput.Value())
 
 	if name == "" || exec == "" {
 		m.statusMessage = "Error: name and command are required"
@@ -912,13 +926,7 @@ func (m MainModel) createServiceFromModal() (tea.Model, tea.Cmd) {
 		Restart:          m.createModal.restart,
 	}
 
-	err := m.client.CreateService(m.ctx, tmpl)
-	if err != nil {
-		m.statusMessage = "Failed to create service: " + err.Error()
-		return m, nil
-	}
-
-	m.showCreate = false
-	m.statusMessage = fmt.Sprintf("Created service: %s", name)
-	return m, m.fetchServices
+	m.creating = true
+	m.statusMessage = fmt.Sprintf("Creating service: %s...", name)
+	return m, m.createService(tmpl)
 }

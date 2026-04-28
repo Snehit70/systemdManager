@@ -23,6 +23,11 @@ type actionResultMsg struct {
 	err     error
 }
 
+type createServiceResultMsg struct {
+	name string
+	err  error
+}
+
 type editorFinishedMsg struct {
 	err error
 }
@@ -156,6 +161,13 @@ func (m MainModel) disableService(unit string) tea.Cmd {
 	return func() tea.Msg {
 		err := m.client.DisableService(m.ctx, unit)
 		return actionResultMsg{message: "Disabled " + unit, err: err}
+	}
+}
+
+func (m MainModel) createService(tmpl client.ServiceTemplate) tea.Cmd {
+	return func() tea.Msg {
+		err := m.client.CreateService(m.ctx, tmpl)
+		return createServiceResultMsg{name: tmpl.Name, err: err}
 	}
 }
 

@@ -101,6 +101,11 @@ func (m MainModel) renderCreateModal(baseView string) string {
 	inputs = append(inputs, fmt.Sprintf("%s %s", m.renderModalLabel("Type:", 4), inputStyle.Render(m.createModal.serviceType+" (t to toggle)")))
 	inputs = append(inputs, fmt.Sprintf("%s %s", m.renderModalLabel("Restart:", 5), inputStyle.Render(m.createModal.restart+" (r to cycle)")))
 
+	footer := "Tab: next • Shift+Tab: prev • Enter: create • Esc: cancel"
+	if m.creating {
+		footer = "Creating service..."
+	}
+
 	content := lipgloss.NewStyle().
 		Width(modalWidth).
 		Height(modalHeight).
@@ -111,7 +116,7 @@ func (m MainModel) renderCreateModal(baseView string) string {
 				"",
 				strings.Join(inputs, "\n"),
 				"",
-				inputStyle.Render("Tab: next • Shift+Tab: prev • Enter: create • Esc: cancel"),
+				inputStyle.Render(footer),
 			),
 		)
 

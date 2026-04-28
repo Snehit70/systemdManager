@@ -14,7 +14,9 @@ import (
 var _ client.ServiceClient = (*mockServiceClient)(nil)
 
 type mockServiceClient struct {
-	services []client.Service
+	services    []client.Service
+	createCalls int
+	createErr   error
 }
 
 func (m *mockServiceClient) ListServices(ctx context.Context) ([]client.Service, error) {
@@ -49,7 +51,8 @@ func (m *mockServiceClient) FollowLogs(ctx context.Context, name string, opts cl
 	return ch, cancel, nil
 }
 func (m *mockServiceClient) CreateService(ctx context.Context, tmpl client.ServiceTemplate) error {
-	return nil
+	m.createCalls++
+	return m.createErr
 }
 
 func newTestModel() MainModel {
@@ -210,5 +213,45 @@ func TestServiceLoadingPopulatesList(t *testing.T) {
 	// Verify status message
 	if m.statusMessage != "Loaded 2 services (1 user-created)" {
 		t.Errorf("Expected 'Loaded 2 services (1 user-created)', got '%s'", m.statusMessage)
+	}
+}
+
+func TestCreateServiceFromModalRunsAsync(t *testing.T) {
+	mockClient := &mockServiceClient{}
+	model := NewMainModel(mockClient, config.Default())
+	model.showCreate = true
+	model.createModal = newCreateModal()
+	model.createModal.nameInput.SetValue("demo")
+	model.createModal.execInput.SetValue("/bin/true")
+
+	updatedModel, cmd := model.createServiceFromModal()
+	m := updatedModel.(MainModel)
+
+	if cmd == nil {
+		t.Fatal("expected create command")
+	}
+	if mockClient.createCalls != 0 {
+		t.Fatalf("expected create not to run synchronously, got %d calls", mockClient.createCalls)
+	}
+	if !m.creating {
+		t.Fatal("expected creating state while command is pending")
+	}
+
+	msg := cmd()
+	if mockClient.createCalls != 1 {
+		t.Fatalf("expected create command to run once, got %d calls", mockClient.createCalls)
+	}
+
+	updatedModel, _ = m.Update(msg)
+	m = updatedModel.(MainModel)
+
+	if m.creating {
+		t.Fatal("expected creating state to clear after result")
+	}
+	if m.showCreate {
+		t.Fatal("expected modal to close after successful creation")
+	}
+	if m.statusMessage != "Created service: demo" {
+		t.Fatalf("unexpected status message: %q", m.statusMessage)
 	}
 }
