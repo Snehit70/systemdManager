@@ -133,6 +133,17 @@ func TestUnitJSONParsingInvalidJSON(t *testing.T) {
 	}
 }
 
+func TestCommandErrorIncludesCommandOutput(t *testing.T) {
+	err := commandError("systemctl start", errors.New("exit status 1"), []byte("Unit demo.service not found\n"))
+
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if got := err.Error(); got != "systemctl start: exit status 1: Unit demo.service not found" {
+		t.Fatalf("unexpected error: %q", got)
+	}
+}
+
 // Interface compliance test
 var _ client.ServiceClient = (*systemdClient)(nil)
 
@@ -402,4 +413,3 @@ func TestMockSystemdClient_ReloadDaemon(t *testing.T) {
 		t.Error("Expected error when fail reload is set")
 	}
 }
-

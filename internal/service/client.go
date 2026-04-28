@@ -54,9 +54,9 @@ func (c *systemdClient) ListServices(ctx context.Context) ([]client.Service, err
 
 func (c *systemdClient) listUnits(ctx context.Context) ([]Unit, error) {
 	cmd := exec.CommandContext(ctx, "systemctl", "--user", "list-units", "--type=service", "--all", "--output=json")
-	output, err := cmd.Output()
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return nil, fmt.Errorf("failed to run systemctl: %w", err)
+		return nil, commandError("failed to run systemctl", err, output)
 	}
 
 	var units []Unit
@@ -69,9 +69,9 @@ func (c *systemdClient) listUnits(ctx context.Context) ([]Unit, error) {
 
 func (c *systemdClient) listUnitFiles(ctx context.Context) ([]UnitFile, error) {
 	cmd := exec.CommandContext(ctx, "systemctl", "--user", "list-unit-files", "--type=service", "--output=json")
-	output, err := cmd.Output()
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return nil, fmt.Errorf("failed to run systemctl list-unit-files: %w", err)
+		return nil, commandError("failed to run systemctl list-unit-files", err, output)
 	}
 
 	var unitFiles []UnitFile
@@ -104,9 +104,9 @@ func (c *systemdClient) DisableService(ctx context.Context, name string) error {
 
 func (c *systemdClient) GetStatus(ctx context.Context, name string) (client.ServiceStatus, error) {
 	cmd := exec.CommandContext(ctx, "systemctl", "--user", "show", name, "--property=ActiveState", "--value")
-	output, err := cmd.Output()
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("failed to get status for %s: %w", name, err)
+		return "", commandError(fmt.Sprintf("failed to get status for %s", name), err, output)
 	}
 
 	state := client.ServiceStatus(strings.TrimSpace(string(output)))
@@ -125,9 +125,9 @@ func (c *systemdClient) GetLogs(ctx context.Context, name string, opts client.Lo
 	}
 
 	cmd := exec.CommandContext(ctx, "journalctl", args...)
-	output, err := cmd.Output()
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("failed to get logs for %s: %w", name, err)
+		return "", commandError(fmt.Sprintf("failed to get logs for %s", name), err, output)
 	}
 
 	return string(output), nil
@@ -174,21 +174,21 @@ func (c *systemdClient) FollowLogs(ctx context.Context, name string, opts client
 
 func (c *systemdClient) GetConfig(ctx context.Context, name string) (string, error) {
 	cmd := exec.CommandContext(ctx, "systemctl", "--user", "cat", name)
-	output, err := cmd.Output()
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("failed to get config for %s: %w", name, err)
+		return "", commandError(fmt.Sprintf("failed to get config for %s", name), err, output)
 	}
 	return string(output), nil
 }
 
 func (c *systemdClient) GetStatusDetails(ctx context.Context, name string) (string, error) {
 	cmd := exec.CommandContext(ctx, "systemctl", "--user", "status", name, "--no-pager")
-	output, err := cmd.Output()
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return string(exitErr.Stderr), nil
+		if len(output) > 0 {
+			return string(output), nil
 		}
-		return "", fmt.Errorf("failed to get status details for %s: %w", name, err)
+		return "", commandError(fmt.Sprintf("failed to get status details for %s", name), err, output)
 	}
 	return string(output), nil
 }
@@ -213,10 +213,19 @@ func (c *systemdClient) ReloadDaemon(ctx context.Context) error {
 
 func (c *systemdClient) runAction(ctx context.Context, action, unit string) error {
 	cmd := exec.CommandContext(ctx, "systemctl", "--user", action, unit)
-	if err := cmd.Run(); err != nil {
-		return client.NewServiceError(action, unit, err)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return client.NewServiceError(action, unit, commandError("systemctl "+action, err, output))
 	}
 	return nil
+}
+
+func commandError(op string, err error, output []byte) error {
+	details := strings.TrimSpace(string(output))
+	if details == "" {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+	return fmt.Errorf("%s: %w: %s", op, err, details)
 }
 
 func (c *systemdClient) unitToService(u Unit, state string) client.Service {

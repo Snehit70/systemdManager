@@ -50,7 +50,8 @@ func NewServiceError(op, unit string, cmdErr error) *ServiceError {
 		Err:  cmdErr,
 	}
 
-	if exitErr, ok := cmdErr.(*exec.ExitError); ok {
+	var exitErr *exec.ExitError
+	if errors.As(cmdErr, &exitErr) {
 		err.Code = exitErr.ExitCode()
 	}
 
