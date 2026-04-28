@@ -33,7 +33,7 @@ func (e *ServiceError) Unwrap() error {
 }
 
 func (e *ServiceError) Is(target error) bool {
-	return target == ErrNotFound || target == ErrPermissionDenied
+	return errors.Is(e.Err, target)
 }
 
 var (
