@@ -1,111 +1,84 @@
 # Systemd TUI Manager
 
-A terminal user interface for managing `systemd --user` services, inspired by LazyGit's intuitive workflow.
+A terminal UI for managing `systemd --user` services. Split-pane layout, vim-style navigation, mouse support, live log following.
 
 ![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go)
 ![License](https://img.shields.io/badge/License-MIT-green.svg)
 
 ## Features
 
-- **Service Management**: Start, stop, restart, enable, disable user services
-- **Service Creation**: Create new services with a simple modal form
-- **Smart Filtering**: Filter by source (all/my services/hide system services)
-- **Live Logs**: View and follow service logs in real-time
-- **Source Indicators**: Visual distinction between user-created (●) and system services (○)
-- **Vim-style Navigation**: `j/k` to navigate, familiar keybindings
-- **Beautiful UI**: Split-pane layout with color-coded status indicators
-- **Themes**: Dark, light, and high-contrast theme support
+- Start, stop, restart, enable, disable user services
+- Create new services from a built-in modal
+- Three detail views per service: live logs, full `systemctl status`, unit config
+- Live log following with bounded buffering
+- Filter modes: all / my services / hide system
+- Grouping: by status (active/failed/inactive) or by load state
+- Source-aware indicators distinguishing user (●), system (○), transient (◌), generated (◆), static (◇)
+- Mouse: click to select rows, click to switch panes, scroll wheel in detail pane
+- Themes: Catppuccin Mocha (default), Dark, Light, High-Contrast — terminal background shows through panel borders for a native feel
 
-## Installation
+## Install
 
 ```bash
-# Clone the repository
 git clone https://github.com/Snehit70/systemdManager
-cd systemd-tui
-
-# Build
+cd systemdManager
 go build -o systemd-tui ./cmd/systemd-tui
-
-# Install to PATH (optional)
-sudo mv systemd-tui /usr/local/bin/
+sudo mv systemd-tui /usr/local/bin/   # optional
 ```
 
-## Usage
+## Run
 
 ```bash
-# Run the TUI
 ./systemd-tui
-
-# Or if installed to PATH
-systemd-tui
 ```
 
 ## Keybindings
 
 | Key | Action |
-|-----|--------|
+|---|---|
 | `j/k` or `↑/↓` | Navigate list |
-| `Tab` | Switch focus (list/detail) |
-| `/` | Filter services |
-| `s` | Start service |
-| `x` | Stop service |
-| `r` | Restart service |
-| `e` | Edit service file |
-| `E` | Enable service |
-| `D` | Disable service |
-| `c` | **Create new service** |
-| `F` | **Cycle filter mode** (all/my services/hide system) |
-| `g` | Toggle grouping |
+| `tab` | Switch focus between list and detail |
+| `/` | Filter services by name |
+| `s` | Start |
+| `x` | Stop (confirm) |
+| `r` | Restart (confirm) |
+| `e` | Edit unit file in `$EDITOR` |
+| `E` | Enable (confirm) |
+| `D` | Disable (confirm) |
+| `c` | Create new service |
 | `f` | Toggle follow logs |
+| `g` | Cycle grouping (none / status / load) |
+| `F` | Cycle source filter (all / my services / hide system) |
+| `t` | Cycle detail view (logs / status / config) |
+| `[` / `]` | Shrink / grow list pane |
 | `?` | Toggle help |
-| `q` | Quit |
+| `q` / `ctrl+c` | Quit |
 
-### Create Service Modal
-
-When creating a service (`c`):
+### Create service modal
 
 | Key | Action |
-|-----|--------|
-| `Tab` | Next field |
-| `Shift+Tab` | Previous field |
-| `t` | Toggle type (simple/oneshot) |
-| `r` | Cycle restart policy |
-| `Enter` | Create service |
-| `Esc` | Cancel |
+|---|---|
+| `tab` / `shift+tab` | Next / previous field |
+| `t` | Cycle service type (simple / oneshot) |
+| `r` | Cycle restart policy (on-failure / always / no) |
+| `enter` | Create |
+| `esc` | Cancel |
 
-## Creating Services
-
-Press `c` to open the service creation modal:
-
-1. **Name**: Service name (e.g., `myapp` - `.service` appended automatically)
-2. **Command**: Full path to executable with args (e.g., `/usr/bin/node /home/user/app.js`)
-3. **Description**: Optional description
-4. **Working Directory**: Optional working directory (defaults to `~`)
-5. **Type**: `simple` (default) or `oneshot`
-6. **Restart**: `on-failure` (default), `always`, or `no`
-
-The service file is created in `~/.config/systemd/user/` and `daemon-reload` is run automatically.
-
-## Filtering
-
-Press `F` to cycle through filter modes:
-
-- **all**: Show all services
-- **my services**: Show only services you created in `~/.config/systemd/user/`
-- **hide system**: Hide static/generated/transient services
+The new unit file is written to `~/.config/systemd/user/` and `daemon-reload` runs automatically.
 
 ## Configuration
 
-Config file: `~/.config/systemd-tui/config.yaml`
+Config file: `~/.config/systemd-tui/config.yaml` (created on first run).
 
 ```yaml
 general:
-  refresh_interval: 2s
-  log_lines: 50
-  editor: vim  # or $EDITOR
+  refresh_interval: 2s     # poll cadence (1s–60s)
+  log_lines: 50            # one-shot log length
+  max_follow_lines: 1000   # follow-mode buffer cap
+  editor: ""               # falls back to $EDITOR, then vim
 
 ui:
-  theme: dark  # dark, light, high-contrast
+  theme: mocha             # mocha | dark | light | high-contrast
   reduce_motion: false
   show_hidden: false
 ```
@@ -113,30 +86,24 @@ ui:
 ## Requirements
 
 - Linux with systemd
-- Go 1.25+ (for building)
-- `systemctl` and `journalctl` in PATH
+- `systemctl` and `journalctl` on `PATH`
+- Go 1.25+ (to build)
 
 ## Development
 
 ```bash
-# Run tests
 go test ./...
-
-# Run with race detector
-go run -race ./cmd/systemd-tui
-
-# Build release binary
 go build -ldflags="-s -w" -o systemd-tui ./cmd/systemd-tui
 ```
 
 ## Architecture
 
-- **Bubble Tea**: TUI framework using The Elm Architecture
-- **Split Layout**: List pane (services) + Detail pane (logs/status)
-- **ServiceClient Interface**: Abstraction for service operations
-- **Polling**: 2-second refresh interval
+- **Bubble Tea** for the Elm-style update loop
+- **`internal/client`** defines the `ServiceClient` interface; `internal/service` provides the systemctl-backed implementation
+- **`internal/ui`** holds the model, view, and styles
+- **`internal/config`** holds YAML loading and theme palettes
 
-See [docs/](./docs/) for detailed design documentation.
+See [`docs/IMPLEMENTATION.md`](./docs/IMPLEMENTATION.md) for current implementation reference, palette, and the rest of the design notes.
 
 ## License
 
