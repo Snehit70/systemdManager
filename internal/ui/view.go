@@ -77,7 +77,7 @@ func (m MainModel) View() string {
 func (m MainModel) renderModalLabel(label string, index int) string {
 	text := label + ":"
 	style := lipgloss.NewStyle().
-		Width(11).
+		Width(13).
 		Background(lipgloss.Color(m.theme.Surface)).
 		Bold(true)
 	if m.createModal.focusIndex == index {
@@ -91,21 +91,21 @@ func (m MainModel) renderModalLabel(label string, index int) string {
 }
 
 func (m MainModel) renderCreateModal(baseView string) string {
-	modalWidth := 68
+	modalWidth := 72
 	if m.width > 0 && modalWidth > m.width-8 {
 		modalWidth = m.width - 8
 	}
-	if modalWidth < 48 {
-		modalWidth = 48
+	if modalWidth < 54 {
+		modalWidth = 54
 	}
-	fieldWidth := modalWidth - 22
+	fieldWidth := modalWidth - 24
 
 	inputStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(m.theme.TextMuted))
 
 	fieldStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(m.theme.Text)).
-		Background(lipgloss.Color(m.theme.Background)).
+		Background(lipgloss.Color(m.theme.Surface)).
 		Padding(0, 1).
 		Width(fieldWidth)
 
@@ -152,11 +152,29 @@ func (m MainModel) renderCreateModal(baseView string) string {
 
 func (m MainModel) renderModalInput(label string, index int, input textinput.Model, fieldStyle lipgloss.Style) string {
 	input.Width = fieldStyle.GetWidth() - 2
-	return fmt.Sprintf("%s %s", m.renderModalLabel(label, index), fieldStyle.Render(input.View()))
+	input.TextStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(m.theme.Text)).
+		Background(lipgloss.Color(m.theme.Surface))
+	input.PlaceholderStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(m.theme.TextMuted)).
+		Background(lipgloss.Color(m.theme.Surface))
+	input.Cursor.Style = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(m.theme.Background)).
+		Background(lipgloss.Color(m.theme.BorderActive))
+
+	row := fmt.Sprintf("%s %s", m.renderModalLabel(label, index), fieldStyle.Render(input.View()))
+	return lipgloss.NewStyle().
+		Width(fieldStyle.GetWidth() + 15).
+		Background(lipgloss.Color(m.theme.Surface)).
+		Render(row)
 }
 
 func (m MainModel) renderModalStaticField(label string, index int, value string, fieldStyle lipgloss.Style) string {
-	return fmt.Sprintf("%s %s", m.renderModalLabel(label, index), fieldStyle.Render(value))
+	row := fmt.Sprintf("%s %s", m.renderModalLabel(label, index), fieldStyle.Render(value))
+	return lipgloss.NewStyle().
+		Width(fieldStyle.GetWidth() + 15).
+		Background(lipgloss.Color(m.theme.Surface)).
+		Render(row)
 }
 
 func overlayCenter(base, modal string, width, height int) string {
