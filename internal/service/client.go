@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"systemd-tui/internal/client"
@@ -20,6 +21,8 @@ type systemdClient struct {
 	editor        string
 	userConfigDir string
 }
+
+var serviceNamePattern = regexp.MustCompile(`^[A-Za-z0-9_.@-]+\.service$`)
 
 func NewSystemdClient(cfg interface{ GetEditor() string }) client.ServiceClient {
 	editor := "vim"
@@ -359,13 +362,17 @@ func (c *systemdClient) restartPolicy(r string) string {
 }
 
 func (c *systemdClient) sanitizeServiceName(name string) string {
-	name = filepath.Base(name)
-	if strings.Contains(name, "..") {
+	name = strings.TrimSpace(name)
+	if name != filepath.Base(name) || strings.Contains(name, "..") {
 		return ""
 	}
 
 	if !strings.HasSuffix(name, ".service") {
 		name += ".service"
+	}
+
+	if !serviceNamePattern.MatchString(name) {
+		return ""
 	}
 
 	return name
@@ -393,6 +400,10 @@ func (c *systemdClient) sanitizeTemplate(tmpl *client.ServiceTemplate) error {
 	tmpl.WorkingDirectory = strings.TrimSpace(tmpl.WorkingDirectory)
 	tmpl.Type = strings.TrimSpace(tmpl.Type)
 	tmpl.Restart = strings.TrimSpace(tmpl.Restart)
+
+	if tmpl.ExecStart == "" {
+		return fmt.Errorf("exec start is required")
+	}
 
 	return nil
 }

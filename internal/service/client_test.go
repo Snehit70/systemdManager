@@ -144,6 +144,37 @@ func TestCommandErrorIncludesCommandOutput(t *testing.T) {
 	}
 }
 
+func TestSanitizeServiceName(t *testing.T) {
+	c := &systemdClient{}
+
+	tests := []struct {
+		name string
+		want string
+	}{
+		{name: "demo", want: "demo.service"},
+		{name: "demo@worker.service", want: "demo@worker.service"},
+		{name: "../demo", want: ""},
+		{name: "bad name", want: ""},
+		{name: "bad/name", want: ""},
+		{name: "..", want: ""},
+	}
+
+	for _, tt := range tests {
+		if got := c.sanitizeServiceName(tt.name); got != tt.want {
+			t.Fatalf("sanitizeServiceName(%q) = %q, want %q", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestSanitizeTemplateRequiresExecStart(t *testing.T) {
+	c := &systemdClient{}
+	tmpl := client.ServiceTemplate{Name: "demo.service"}
+
+	if err := c.sanitizeTemplate(&tmpl); err == nil {
+		t.Fatal("expected missing ExecStart to fail validation")
+	}
+}
+
 // Interface compliance test
 var _ client.ServiceClient = (*systemdClient)(nil)
 
