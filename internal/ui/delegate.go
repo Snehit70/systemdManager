@@ -21,11 +21,20 @@ func (d itemDelegate) Spacing() int                            { return 1 }
 func (d itemDelegate) Update(_ tea.Msg, _ *list.Model) tea.Cmd { return nil }
 
 func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list.Item) {
+	rowWidth := m.Width()
+	if rowWidth <= 0 {
+		rowWidth = 40
+	}
+
 	if header, ok := listItem.(groupHeaderItem); ok {
-		headerStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("241")).
-			Bold(true)
-		fmt.Fprint(w, headerStyle.Render(runewidth.Truncate(header.title, m.Width(), "…")))
+		label := GroupHeaderStyle.Render(strings.ToUpper(header.title))
+		labelWidth := runewidth.StringWidth(strings.ToUpper(header.title))
+		ruleLen := rowWidth - labelWidth - 1
+		if ruleLen < 0 {
+			ruleLen = 0
+		}
+		rule := GroupHeaderRuleStyle.Render(strings.Repeat("─", ruleLen))
+		fmt.Fprint(w, label+" "+rule)
 		return
 	}
 
@@ -39,32 +48,33 @@ func (d itemDelegate) Render(w io.Writer, m list.Model, index int, listItem list
 	sourceStyling := sourceStyle(i.svc.Source)
 	styledIndicator := sourceStyling.Render(sourceIndicator)
 
-	rowWidth := m.Width()
-	if rowWidth <= 0 {
-		rowWidth = 40
-	}
-
-	prefixWidth := runewidth.StringWidth("> ")
+	prefixWidth := runewidth.StringWidth("▎ ")
 	indicatorWidth := runewidth.StringWidth(sourceIndicator + " ")
 	name := truncateServiceName(i.svc.Name, rowWidth-prefixWidth-indicatorWidth)
 
-	var str string
-	if index == m.Index() {
-		str = SelectedStyle.Render("> " + styledIndicator + " " + statusStyle.Render(name))
+	selected := index == m.Index()
+	var prefix string
+	if selected {
+		prefix = SelectedStyle.Render("▎")
 	} else {
-		str = "  " + styledIndicator + " " + statusStyle.Render(name)
+		prefix = " "
 	}
 
-	desc := truncateDescription(i.svc.Description, rowWidth-2)
-	descStyle := DescriptionStyle
+	nameRender := statusStyle.Render(name)
+	if selected {
+		nameRender = lipgloss.NewStyle().Bold(true).Inherit(statusStyle).Render(name)
+	}
 
+	titleRow := prefix + " " + styledIndicator + " " + nameRender
+
+	desc := truncateDescription(i.svc.Description, rowWidth-3)
+	descStyle := DescriptionStyle
 	if i.svc.Status == "failed" {
 		descStyle = FailedStyle
 	}
+	descRow := "   " + descStyle.Render(desc)
 
-	str += "\n  " + descStyle.Render(desc)
-
-	fmt.Fprint(w, str)
+	fmt.Fprint(w, titleRow+"\n"+descRow)
 }
 
 func truncateServiceName(name string, maxWidth int) string {

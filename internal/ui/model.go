@@ -315,6 +315,21 @@ func NewMainModel(client client.ServiceClient, cfg *config.Config) MainModel {
 	l.SetShowFilter(false)
 	l.SetShowStatusBar(false)
 
+	// Override the default bubbles list title (purple bg, white fg) with a
+	// theme-aware accent strip that fits the rest of the UI.
+	l.Styles.Title = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.BorderActive)).
+		Bold(true).
+		Padding(0, 1).
+		Border(lipgloss.NormalBorder(), false, false, true, false).
+		BorderForeground(lipgloss.Color(theme.Border))
+	l.Styles.NoItems = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.TextDim)).
+		Padding(0, 1)
+	l.Styles.PaginationStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.TextDim)).
+		Padding(0, 1)
+
 	listKeys := list.DefaultKeyMap()
 	listKeys.Quit = key.NewBinding(key.WithKeys("ctrl+c"))
 	l.KeyMap = listKeys
@@ -385,6 +400,48 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case list.FilterMatchesMsg:
 		m.list, cmd = m.list.Update(msg)
 		return m, cmd
+
+	case tea.MouseMsg:
+		// Determine which pane the mouse is over and route the event.
+		// Layout: list pane on the left of width listWidth, then detail pane.
+		listWidth := int(float64(m.width) * m.splitRatio)
+		if listWidth < 20 {
+			listWidth = 20
+		}
+		// The list pane occupies columns [0, listWidth] roughly; clicks beyond
+		// that fall in the detail pane.
+		inDetailPane := msg.X >= listWidth
+
+		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+			if inDetailPane {
+				m.activeView = detailView
+			} else {
+				m.activeView = listView
+			}
+		}
+
+		if inDetailPane {
+			m.viewport, cmd = m.viewport.Update(msg)
+		} else {
+			var prevItem list.Item
+			if m.list.SelectedItem() != nil {
+				prevItem = m.list.SelectedItem()
+			}
+			m.list, cmd = m.list.Update(msg)
+			if svc := m.getSelectedService(); svc != nil {
+				currItem := m.list.SelectedItem()
+				if prevItem == nil || currItem.FilterValue() != prevItem.FilterValue() {
+					if m.following {
+						m.stopFollow()
+						m.statusMessage = "Stopped following (service changed)"
+					}
+					m.selectedSvc = svc.Name
+					cmds = append(cmds, m.fetchLogs(svc.Name))
+				}
+			}
+		}
+		cmds = append(cmds, cmd)
+		return m, tea.Batch(cmds...)
 
 	case tea.KeyMsg:
 		if m.list.FilterState() == list.Filtering {
@@ -637,19 +694,20 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if lines <= 0 {
 					lines = 50
 				}
-				var content string
+				var body string
+				banner := fmt.Sprintf("Last %d lines", lines)
 				if msg.err != nil {
-					content = fmt.Sprintf(
-						"Service: %s\nStatus: %s (%s)\nDescription: %s\n\n[Log Error]\n%s",
-						svc.Name, svc.Status, svc.Sub, svc.Description, msg.err.Error(),
-					)
+					banner = "Log error"
+					body = lipgloss.NewStyle().
+						Foreground(lipgloss.Color(m.theme.StatusFailed)).
+						Render(msg.err.Error())
 				} else {
-					styledLogs := styleLogContent(msg.logs, m.theme)
-					content = fmt.Sprintf(
-						"Service: %s\nStatus: %s (%s)\nDescription: %s\n\n[Last %d Lines of Log]\n%s",
-						svc.Name, svc.Status, svc.Sub, svc.Description, lines, styledLogs,
-					)
+					body = styleLogContent(msg.logs, m.theme)
 				}
+				header := renderDetailHeader(m.theme,
+					svc.Name, string(svc.Status), svc.Sub, string(svc.Source),
+					svc.Description, banner, m.viewport.Width)
+				content := header + "\n" + body
 				m.viewport.SetContent(m.viewportWithScrollInfo(content))
 			}
 		}
@@ -680,14 +738,19 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if svc := m.getSelectedService(); svc != nil {
 				trimNotice := ""
 				if m.followTrimmed {
-					trimNotice = fmt.Sprintf("\n[Buffer trimmed - showing last %d lines]", maxLines)
+					trimNotice = "\n" + lipgloss.NewStyle().
+						Foreground(lipgloss.Color(m.theme.TextDim)).
+						Italic(true).
+						Render(fmt.Sprintf("buffer trimmed — showing last %d lines", maxLines)) + "\n"
 				}
 				styledFollowLogs := styleLogContent(strings.Join(m.followLogLines, "\n"), m.theme)
-				content := fmt.Sprintf(
-					"Service: %s\nStatus: %s (%s)\nDescription: %s\n\n[FOLLOWING - Press f to stop]%s\n%s",
-					svc.Name, svc.Status, svc.Sub, svc.Description, trimNotice,
-					styledFollowLogs,
-				)
+
+				// Header without the standard banner; followBanner replaces it.
+				header := renderDetailHeader(m.theme,
+					svc.Name, string(svc.Status), svc.Sub, string(svc.Source),
+					svc.Description, "", m.viewport.Width)
+				banner := followBanner(m.theme, m.viewport.Width)
+				content := header + banner + "\n" + trimNotice + styledFollowLogs
 				m.viewport.SetContent(content)
 				m.viewport.GotoBottom()
 			}

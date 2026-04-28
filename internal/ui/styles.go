@@ -12,7 +12,10 @@ var (
 	InactiveStyle        lipgloss.Style
 	DegradedStyle        lipgloss.Style
 	SelectedStyle        lipgloss.Style
+	SelectedRowStyle     lipgloss.Style
 	DescriptionStyle     lipgloss.Style
+	GroupHeaderStyle     lipgloss.Style
+	GroupHeaderRuleStyle lipgloss.Style
 	SourceUserStyle      lipgloss.Style
 	SourceSystemStyle    lipgloss.Style
 	SourceTransientStyle lipgloss.Style
@@ -31,15 +34,29 @@ func ApplyTheme(theme config.ThemeColors) {
 	InactiveStyle = lipgloss.NewStyle().
 		Foreground(lipgloss.Color(theme.StatusInactive))
 
+	activating := theme.StatusActivating
+	if activating == "" {
+		activating = "#FFA500"
+	}
 	DegradedStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#FFA500"))
+		Foreground(lipgloss.Color(activating))
 
 	SelectedStyle = lipgloss.NewStyle().
 		Foreground(lipgloss.Color(theme.BorderActive)).
 		Bold(true)
 
+	SelectedRowStyle = lipgloss.NewStyle().
+		Background(lipgloss.Color(theme.Surface))
+
 	DescriptionStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color(theme.TextMuted))
+		Foreground(lipgloss.Color(theme.TextDim))
+
+	GroupHeaderStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.Accent)).
+		Bold(true)
+
+	GroupHeaderRuleStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.Border))
 
 	SourceUserStyle = lipgloss.NewStyle().
 		Foreground(lipgloss.Color(theme.SourceUser))
@@ -56,7 +73,7 @@ func ApplyTheme(theme config.ThemeColors) {
 }
 
 func init() {
-	ApplyTheme(config.DarkTheme)
+	ApplyTheme(config.MochaTheme)
 }
 
 func GetStatusStyle(activeState string) lipgloss.Style {

@@ -40,7 +40,7 @@ func Default() *Config {
 			Editor:          "",
 		},
 		UI: UIConfig{
-			Theme:        "dark",
+			Theme:        "mocha",
 			ReduceMotion: false,
 			ShowHidden:   false,
 		},
@@ -148,21 +148,31 @@ func (c *Config) ThemeColors() ThemeColors {
 		return LightTheme
 	case "high-contrast":
 		return HighContrastTheme
-	default:
+	case "dark":
 		return DarkTheme
+	default:
+		return MochaTheme
 	}
 }
 
 type ThemeColors struct {
+	// Background is left empty when the theme should not paint panel
+	// backgrounds — the terminal background shows through. Surface is still
+	// used for the modal, status bar, help bar and similar elements that
+	// must stand apart from the underlying terminal.
 	Background      string
 	Surface         string
+	SurfaceDeep     string
 	Border          string
 	BorderActive    string
+	Accent          string
 	Text            string
 	TextMuted       string
+	TextDim         string
 	StatusActive    string
 	StatusFailed    string
 	StatusInactive  string
+	StatusActivating string
 	LogError        string
 	LogWarn         string
 	LogInfo         string
@@ -174,44 +184,80 @@ type ThemeColors struct {
 	SourceStatic    string
 }
 
-// DarkTheme provides a dark color scheme optimized for terminal use.
+// MochaTheme is a Catppuccin Mocha–inspired palette. Panels stay transparent
+// (Background is unset) so the terminal background shows through; only the
+// modal, status bar and help bar are filled with Surface/SurfaceDeep.
+var MochaTheme = ThemeColors{
+	Background:       "",
+	Surface:          "#313244", // surface0
+	SurfaceDeep:      "#181825", // mantle
+	Border:           "#45475a", // surface1
+	BorderActive:     "#cba6f7", // mauve
+	Accent:           "#89b4fa", // blue
+	Text:             "#cdd6f4", // text
+	TextMuted:        "#a6adc8", // subtext0
+	TextDim:          "#6c7086", // overlay0
+	StatusActive:     "#a6e3a1", // green
+	StatusFailed:     "#f38ba8", // red
+	StatusInactive:   "#6c7086", // overlay0
+	StatusActivating: "#fab387", // peach
+	LogError:         "#f38ba8",
+	LogWarn:          "#f9e2af",
+	LogInfo:          "#89b4fa",
+	LogDebug:         "#6c7086",
+	SourceUser:       "#a6e3a1",
+	SourceSystem:     "#89b4fa",
+	SourceTransient:  "#f9e2af",
+	SourceGenerated:  "#cba6f7",
+	SourceStatic:     "#7f849c",
+}
+
+// DarkTheme provides the legacy dark color scheme.
 var DarkTheme = ThemeColors{
-	Background:      "#1A1A2E",
-	Surface:         "#16213E",
-	Border:          "#2D3A5C",
-	BorderActive:    "#5B9BF3",
-	Text:            "#E8E8E8",
-	TextMuted:       "#6B6B6B",
-	StatusActive:    "#73F59F",
-	StatusFailed:    "#FF6B6B",
-	StatusInactive:  "#666666",
-	LogError:        "#FF6B6B",
-	LogWarn:         "#FFD93D",
-	LogInfo:         "#5B9BF3",
-	LogDebug:        "#6B6B6B",
-	SourceUser:      "#73F59F",
-	SourceSystem:    "#5B9BF3",
-	SourceTransient: "#FFD93D",
-	SourceGenerated: "#C792EA",
-	SourceStatic:    "#666666",
+	Background:       "#1A1A2E",
+	Surface:          "#16213E",
+	SurfaceDeep:      "#0F1A33",
+	Border:           "#2D3A5C",
+	BorderActive:     "#5B9BF3",
+	Accent:           "#5B9BF3",
+	Text:             "#E8E8E8",
+	TextMuted:        "#9A9A9A",
+	TextDim:          "#6B6B6B",
+	StatusActive:     "#73F59F",
+	StatusFailed:     "#FF6B6B",
+	StatusInactive:   "#666666",
+	StatusActivating: "#FFA500",
+	LogError:         "#FF6B6B",
+	LogWarn:          "#FFD93D",
+	LogInfo:          "#5B9BF3",
+	LogDebug:         "#6B6B6B",
+	SourceUser:       "#73F59F",
+	SourceSystem:     "#5B9BF3",
+	SourceTransient:  "#FFD93D",
+	SourceGenerated:  "#C792EA",
+	SourceStatic:     "#666666",
 }
 
 // LightTheme provides a light color scheme for bright environments.
 var LightTheme = ThemeColors{
-	Background:      "#FAFAFA",
-	Surface:         "#FFFFFF",
-	Border:          "#E0E0E0",
-	BorderActive:    "#1976D2",
-	Text:            "#1A1A1A",
-	TextMuted:       "#757575",
-	StatusActive:    "#2E7D32",
-	StatusFailed:    "#C62828",
-	StatusInactive:  "#757575",
-	LogError:        "#C62828",
-	LogWarn:         "#F9A825",
-	LogInfo:         "#1976D2",
-	LogDebug:        "#757575",
-	SourceUser:      "#2E7D32",
+	Background:       "#FAFAFA",
+	Surface:          "#FFFFFF",
+	SurfaceDeep:      "#F0F0F0",
+	Border:           "#E0E0E0",
+	BorderActive:     "#1976D2",
+	Accent:           "#1976D2",
+	Text:             "#1A1A1A",
+	TextMuted:        "#555555",
+	TextDim:          "#757575",
+	StatusActive:     "#2E7D32",
+	StatusFailed:     "#C62828",
+	StatusInactive:   "#757575",
+	StatusActivating: "#EF6C00",
+	LogError:         "#C62828",
+	LogWarn:          "#F9A825",
+	LogInfo:          "#1976D2",
+	LogDebug:         "#757575",
+	SourceUser:       "#2E7D32",
 	SourceSystem:    "#1976D2",
 	SourceTransient: "#F9A825",
 	SourceGenerated: "#7B1FA2",
@@ -220,20 +266,24 @@ var LightTheme = ThemeColors{
 
 // HighContrastTheme provides a high contrast color scheme for accessibility.
 var HighContrastTheme = ThemeColors{
-	Background:      "#000000",
-	Surface:         "#1A1A1A",
-	Border:          "#FFFFFF",
-	BorderActive:    "#00FF00",
-	Text:            "#FFFFFF",
-	TextMuted:       "#AAAAAA",
-	StatusActive:    "#00FF00",
-	StatusFailed:    "#FF0000",
-	StatusInactive:  "#888888",
-	LogError:        "#FF0000",
-	LogWarn:         "#FFFF00",
-	LogInfo:         "#00FFFF",
-	LogDebug:        "#AAAAAA",
-	SourceUser:      "#00FF00",
+	Background:       "#000000",
+	Surface:          "#1A1A1A",
+	SurfaceDeep:      "#000000",
+	Border:           "#FFFFFF",
+	BorderActive:     "#00FF00",
+	Accent:           "#00FFFF",
+	Text:             "#FFFFFF",
+	TextMuted:        "#CCCCCC",
+	TextDim:          "#AAAAAA",
+	StatusActive:     "#00FF00",
+	StatusFailed:     "#FF0000",
+	StatusInactive:   "#888888",
+	StatusActivating: "#FFFF00",
+	LogError:         "#FF0000",
+	LogWarn:          "#FFFF00",
+	LogInfo:          "#00FFFF",
+	LogDebug:         "#AAAAAA",
+	SourceUser:       "#00FF00",
 	SourceSystem:    "#00FFFF",
 	SourceTransient: "#FFFF00",
 	SourceGenerated: "#FF00FF",

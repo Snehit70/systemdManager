@@ -107,10 +107,12 @@ func (m MainModel) fetchDetailContent(unit string) tea.Cmd {
 			} else {
 				svc := m.selectedServiceByName(unit)
 				if svc != nil {
-					content = fmt.Sprintf(
-						"Service: %s\nStatus: %s (%s)\nDescription: %s\n\n[Last %d Lines of Log]\n%s",
-						svc.Name, svc.Status, svc.Sub, svc.Description, lines, content,
-					)
+					header := renderDetailHeader(m.theme,
+						svc.Name, string(svc.Status), svc.Sub, string(svc.Source),
+						svc.Description,
+						fmt.Sprintf("Last %d lines", lines),
+						m.viewport.Width)
+					content = header + "\n" + content
 				}
 			}
 		}

@@ -13,6 +13,9 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
+// modalLabelWidth is the fixed left-column width for create modal labels.
+const modalLabelWidth = 13
+
 func (m MainModel) View() string {
 	var listStyle, detailStyle lipgloss.Style
 
@@ -42,10 +45,7 @@ func (m MainModel) View() string {
 
 	filterBar := ""
 	if m.list.FilterState() == list.Filtering {
-		filterStyle := lipgloss.NewStyle().
-			PaddingLeft(1).
-			Width(fullWidth)
-		filterBar = filterStyle.Render(m.list.FilterInput.View())
+		filterBar = m.renderFilterBar(fullWidth)
 	}
 
 	var helpView string
@@ -53,7 +53,7 @@ func (m MainModel) View() string {
 		helpView = lipgloss.NewStyle().
 			Width(fullWidth).
 			PaddingLeft(1).
-			Background(lipgloss.Color(m.theme.Surface)).
+			Background(lipgloss.Color(m.theme.SurfaceDeep)).
 			Render(m.help.View(keys))
 	} else {
 		helpView = renderHelpBar(keys, fullWidth, m.theme)
@@ -74,108 +74,267 @@ func (m MainModel) View() string {
 	return baseView
 }
 
+// --- Create modal ----------------------------------------------------------
+
 func (m MainModel) renderModalLabel(label string, index int) string {
-	text := label + ":"
-	style := lipgloss.NewStyle().
-		Width(13).
-		Background(lipgloss.Color(m.theme.Surface)).
-		Bold(true)
+	style := lipgloss.NewStyle().Width(modalLabelWidth).Bold(true)
 	if m.createModal.focusIndex == index {
-		return style.
-			Foreground(lipgloss.Color(m.theme.BorderActive)).
-			Render(text)
+		return style.Foreground(lipgloss.Color(m.theme.BorderActive)).Render(label)
 	}
-	return style.
-		Foreground(lipgloss.Color(m.theme.Text)).
-		Render(text)
+	return style.Foreground(lipgloss.Color(m.theme.TextMuted)).Render(label)
 }
 
 func (m MainModel) renderCreateModal(baseView string) string {
-	modalWidth := 72
+	modalWidth := 64
 	if m.width > 0 && modalWidth > m.width-8 {
 		modalWidth = m.width - 8
 	}
 	if modalWidth < 54 {
 		modalWidth = 54
 	}
-	fieldWidth := modalWidth - 24
-
-	inputStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(m.theme.TextMuted))
-
-	fieldStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(m.theme.Text)).
-		Background(lipgloss.Color(m.theme.Surface)).
-		Padding(0, 1).
-		Width(fieldWidth)
-
-	var inputs []string
-	inputs = append(inputs, m.renderModalInput("Name", 0, m.createModal.nameInput, fieldStyle))
-	inputs = append(inputs, m.renderModalInput("Command", 1, m.createModal.execInput, fieldStyle))
-	inputs = append(inputs, m.renderModalInput("Description", 2, m.createModal.descInput, fieldStyle))
-	inputs = append(inputs, m.renderModalInput("Workdir", 3, m.createModal.workdirInput, fieldStyle))
-	inputs = append(inputs, m.renderModalStaticField("Type", 4, m.createModal.serviceType+"  (press t)", fieldStyle))
-	inputs = append(inputs, m.renderModalStaticField("Restart", 5, m.createModal.restart+"  (press r)", fieldStyle))
-
-	footer := "Tab: next • Shift+Tab: prev • Enter: create • Esc: cancel"
-	if m.creating {
-		footer = "Creating service..."
+	innerWidth := modalWidth - 4 // padding(1,2) -> 2 left + 2 right
+	fieldWidth := innerWidth - modalLabelWidth - 1
+	if fieldWidth < 16 {
+		fieldWidth = 16
 	}
 
+	subtle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.TextMuted))
+	accent := lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.Accent)).Bold(true)
+	title := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(m.theme.BorderActive)).
+		Bold(true).
+		Render("✦  Create New Service")
+
+	var lines []string
+	lines = append(lines, title)
+	lines = append(lines, subtle.Render("Creates a user unit in ~/.config/systemd/user/"))
+	lines = append(lines, "")
+	lines = append(lines, m.renderModalTextInput("Name", 0, &m.createModal.nameInput, fieldWidth))
+	lines = append(lines, m.renderModalTextInput("Command", 1, &m.createModal.execInput, fieldWidth))
+	lines = append(lines, m.renderModalTextInput("Description", 2, &m.createModal.descInput, fieldWidth))
+	lines = append(lines, m.renderModalTextInput("Workdir", 3, &m.createModal.workdirInput, fieldWidth))
+	lines = append(lines, m.renderModalChoiceField("Type", 4, m.createModal.serviceType, "t", fieldWidth))
+	lines = append(lines, m.renderModalChoiceField("Restart", 5, m.createModal.restart, "r", fieldWidth))
+	lines = append(lines, "")
+
+	if m.creating {
+		lines = append(lines, accent.Render("⠋  Creating service…"))
+	} else {
+		lines = append(lines, joinHints([]hint{
+			{key: "tab", desc: "next"},
+			{key: "↵", desc: "create"},
+			{key: "esc", desc: "cancel"},
+		}, m.theme))
+	}
+
+	// Pre-pad every line to the inner width so the modal background paints
+	// uniformly without leaving the trailing dark bands seen in the old UI.
+	filled := make([]string, len(lines))
+	for i, l := range lines {
+		filled[i] = padBgLine(l, innerWidth, m.theme.SurfaceDeep)
+	}
+
+	body := lipgloss.JoinVertical(lipgloss.Left, filled...)
+
 	content := lipgloss.NewStyle().
-		Width(modalWidth).
 		Padding(1, 2).
-		Background(lipgloss.Color(m.theme.Surface)).
-		Render(
-			lipgloss.JoinVertical(lipgloss.Left,
-				lipgloss.NewStyle().
-					Foreground(lipgloss.Color(m.theme.Text)).
-					Background(lipgloss.Color(m.theme.Surface)).
-					Bold(true).
-					Render("Create New Service"),
-				inputStyle.Render("Creates a user unit in ~/.config/systemd/user/"),
-				"",
-				strings.Join(inputs, "\n"),
-				"",
-				inputStyle.Render(footer),
-			),
-		)
+		Background(lipgloss.Color(m.theme.SurfaceDeep)).
+		Render(body)
 
 	modal := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color(m.theme.BorderActive)).
-		Background(lipgloss.Color(m.theme.Surface)).
+		BorderBackground(lipgloss.Color(m.theme.SurfaceDeep)).
 		Render(content)
 
 	return overlayCenter(baseView, modal, m.width, m.height)
 }
 
-func (m MainModel) renderModalInput(label string, index int, input textinput.Model, fieldStyle lipgloss.Style) string {
-	input.Width = fieldStyle.GetWidth() - 2
+func (m MainModel) renderModalTextInput(label string, index int, input *textinput.Model, fieldWidth int) string {
+	focused := m.createModal.focusIndex == index
+	bgColor := m.theme.Surface
+	borderColor := m.theme.Border
+	if focused {
+		borderColor = m.theme.BorderActive
+	}
+
+	input.Width = fieldWidth - 2
 	input.TextStyle = lipgloss.NewStyle().
 		Foreground(lipgloss.Color(m.theme.Text)).
-		Background(lipgloss.Color(m.theme.Surface))
+		Background(lipgloss.Color(bgColor))
 	input.PlaceholderStyle = lipgloss.NewStyle().
-		Foreground(lipgloss.Color(m.theme.TextMuted)).
-		Background(lipgloss.Color(m.theme.Surface))
+		Foreground(lipgloss.Color(m.theme.TextDim)).
+		Background(lipgloss.Color(bgColor))
 	input.Cursor.Style = lipgloss.NewStyle().
-		Foreground(lipgloss.Color(m.theme.Background)).
+		Foreground(lipgloss.Color(m.theme.SurfaceDeep)).
 		Background(lipgloss.Color(m.theme.BorderActive))
 
-	row := fmt.Sprintf("%s %s", m.renderModalLabel(label, index), fieldStyle.Render(input.View()))
-	return lipgloss.NewStyle().
-		Width(fieldStyle.GetWidth() + 15).
-		Background(lipgloss.Color(m.theme.Surface)).
-		Render(row)
+	field := lipgloss.NewStyle().
+		Background(lipgloss.Color(bgColor)).
+		Foreground(lipgloss.Color(m.theme.Text)).
+		Padding(0, 1).
+		Width(fieldWidth).
+		Border(lipgloss.NormalBorder(), false, false, true, false).
+		BorderForeground(lipgloss.Color(borderColor)).
+		BorderBackground(lipgloss.Color(m.theme.SurfaceDeep)).
+		Render(input.View())
+
+	return lipgloss.JoinHorizontal(lipgloss.Top, m.renderModalLabel(label, index), " ", field)
 }
 
-func (m MainModel) renderModalStaticField(label string, index int, value string, fieldStyle lipgloss.Style) string {
-	row := fmt.Sprintf("%s %s", m.renderModalLabel(label, index), fieldStyle.Render(value))
-	return lipgloss.NewStyle().
-		Width(fieldStyle.GetWidth() + 15).
-		Background(lipgloss.Color(m.theme.Surface)).
-		Render(row)
+func (m MainModel) renderModalChoiceField(label string, index int, value, key string, fieldWidth int) string {
+	focused := m.createModal.focusIndex == index
+	valColor := m.theme.Text
+	if focused {
+		valColor = m.theme.BorderActive
+	}
+	val := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(valColor)).
+		Bold(true).
+		Render(value)
+
+	hintText := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(m.theme.TextDim)).
+		Render(" cycle")
+	rest := val + "   " + kbdChip(key, m.theme) + hintText
+
+	field := lipgloss.NewStyle().Padding(0, 1).Width(fieldWidth).Render(rest)
+	return lipgloss.JoinHorizontal(lipgloss.Top, m.renderModalLabel(label, index), " ", field)
 }
+
+// --- Detail pane header ---------------------------------------------------
+
+// renderDetailHeader renders the service identity block for the detail pane:
+// the service name in bold, status + source pills, the description, and a
+// banner separator labelling the section (e.g. "Last 50 lines" or
+// "FOLLOWING").
+//
+// `width` is the viewport content width; passing 0 disables the trailing rule.
+func renderDetailHeader(theme config.ThemeColors, name, status, sub, source, description, banner string, width int) string {
+	statusLabel := status
+	if sub != "" && sub != status {
+		statusLabel = status + " " + sub
+	}
+
+	statusPill := statusBadge(theme, status, statusLabel)
+	sourcePill := sourceBadge(theme, source)
+
+	nameStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.Text)).
+		Bold(true)
+
+	pills := statusPill + "  " + sourcePill
+	pillsWidth := lipgloss.Width(pills)
+	nameRendered := nameStyle.Render(name)
+	nameWidth := lipgloss.Width(nameRendered)
+
+	var headerLine string
+	if width > 0 && nameWidth+pillsWidth+2 < width {
+		gap := width - nameWidth - pillsWidth
+		if gap < 1 {
+			gap = 1
+		}
+		headerLine = nameRendered + strings.Repeat(" ", gap) + pills
+	} else {
+		headerLine = nameRendered + "  " + pills
+	}
+
+	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(theme.TextMuted))
+	descLine := descStyle.Render(description)
+
+	bannerLine := renderSectionBanner(theme, banner, width)
+
+	return strings.Join([]string{headerLine, descLine, "", bannerLine, ""}, "\n")
+}
+
+func statusBadge(theme config.ThemeColors, status, label string) string {
+	color := theme.StatusInactive
+	switch status {
+	case "active":
+		color = theme.StatusActive
+	case "failed":
+		color = theme.StatusFailed
+	case "activating", "deactivating", "reloading":
+		color = theme.StatusActivating
+	}
+	dot := lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render("●")
+	text := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(color)).
+		Bold(true).
+		Render(label)
+	return dot + " " + text
+}
+
+func sourceBadge(theme config.ThemeColors, source string) string {
+	color := theme.SourceStatic
+	switch source {
+	case "user":
+		color = theme.SourceUser
+	case "system":
+		color = theme.SourceSystem
+	case "transient":
+		color = theme.SourceTransient
+	case "generated":
+		color = theme.SourceGenerated
+	case "static":
+		color = theme.SourceStatic
+	}
+	if source == "" {
+		source = "unknown"
+	}
+	dot := lipgloss.NewStyle().Foreground(lipgloss.Color(color)).Render("◆")
+	text := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.TextMuted)).
+		Render(source)
+	return dot + " " + text
+}
+
+func renderSectionBanner(theme config.ThemeColors, label string, width int) string {
+	if label == "" {
+		return ""
+	}
+	labelStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.Accent)).
+		Bold(true)
+	rule := lipgloss.NewStyle().Foreground(lipgloss.Color(theme.Border))
+
+	rendered := labelStyle.Render(label)
+	if width <= 0 {
+		return rule.Render("──── ") + rendered
+	}
+	prefix := rule.Render("──── ")
+	used := lipgloss.Width(prefix) + lipgloss.Width(rendered) + 1
+	if used >= width {
+		return prefix + rendered
+	}
+	return prefix + rendered + " " + rule.Render(strings.Repeat("─", width-used))
+}
+
+// followBanner renders the FOLLOWING section banner with a pulsing-style
+// indicator. Bubble Tea is one-shot per render, so the indicator is static
+// but visually distinct.
+func followBanner(theme config.ThemeColors, width int) string {
+	indicator := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.StatusActive)).
+		Bold(true).
+		Render("⦿ FOLLOWING")
+	hint := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.TextMuted)).
+		Render("press f to stop")
+	rule := lipgloss.NewStyle().Foreground(lipgloss.Color(theme.Border))
+
+	left := indicator + "  " + hint
+	if width <= 0 {
+		return left
+	}
+	used := lipgloss.Width(left) + 1
+	if used >= width {
+		return left
+	}
+	return left + " " + rule.Render(strings.Repeat("─", width-used))
+}
+
+// --- Overlay helper --------------------------------------------------------
 
 func overlayCenter(base, modal string, width, height int) string {
 	if width <= 0 || height <= 0 {
@@ -222,6 +381,8 @@ func overlayCenter(base, modal string, width, height int) string {
 	return strings.Join(baseLines, "\n")
 }
 
+// --- Detail viewport scroll info ------------------------------------------
+
 func (m *MainModel) viewportWithScrollInfo(content string) string {
 	totalLines := strings.Count(content, "\n") + 1
 	viewportHeight := m.viewport.Height
@@ -235,109 +396,215 @@ func (m *MainModel) viewportWithScrollInfo(content string) string {
 	return fmt.Sprintf("[%d/%d]\n%s", scrollPos, totalLines, content)
 }
 
+// --- Status, filter and help bars -----------------------------------------
+
 func (m MainModel) renderStatusBar(width int) string {
-	sepStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(m.theme.Border))
-	labelStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(m.theme.BorderActive)).
+	bg := m.theme.Surface
+
+	countStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(m.theme.Text)).
+		Background(lipgloss.Color(bg)).
 		Bold(true)
-	valStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(m.theme.TextMuted))
+	dimStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(m.theme.TextMuted)).
+		Background(lipgloss.Color(bg))
+	sepStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(m.theme.Border)).
+		Background(lipgloss.Color(bg))
+	sep := sepStyle.Render("  ")
 
-	sep := sepStyle.Render(" │ ")
-
-	// Left segments: counts, filter, group, follow, detail mode
 	var segments []string
 
-	// Service counts
 	filtered := m.filteredServices()
-	if len(filtered) != len(m.services) {
-		segments = append(segments, valStyle.Render(fmt.Sprintf("%d/%d services", len(filtered), len(m.services))))
+	totalCount := len(m.services)
+	if len(filtered) != totalCount {
+		segments = append(segments, countStyle.Render(fmt.Sprintf("%d", len(filtered)))+
+			dimStyle.Render(fmt.Sprintf("/%d services", totalCount)))
 	} else {
-		segments = append(segments, valStyle.Render(fmt.Sprintf("%d services", len(m.services))))
+		segments = append(segments, countStyle.Render(fmt.Sprintf("%d", totalCount))+
+			dimStyle.Render(" services"))
 	}
 
-	// Filter mode
 	if m.filterMode != filterAll {
-		segments = append(segments, labelStyle.Render("F:")+valStyle.Render(m.filterMode.String()))
+		segments = append(segments, chip("filter", m.filterMode.String(), m.theme.Accent, m.theme))
 	}
-
-	// Group mode
 	if m.groupMode != groupNone {
-		segments = append(segments, labelStyle.Render("G:")+valStyle.Render(m.groupMode.String()))
+		segments = append(segments, chip("group", m.groupMode.String(), m.theme.SourceGenerated, m.theme))
 	}
-
-	// Follow state
-	if m.following {
-		segments = append(segments, labelStyle.Render("⦿ FOLLOWING"))
-	}
-
-	// Detail view mode
 	if m.detailViewMode != detailViewLogs {
-		segments = append(segments, labelStyle.Render("View:")+valStyle.Render(m.detailViewMode.String()))
+		segments = append(segments, chip("view", m.detailViewMode.String(), m.theme.SourceTransient, m.theme))
+	}
+	if m.following {
+		segments = append(segments, chip("●", "following", m.theme.StatusActive, m.theme))
 	}
 
 	left := strings.Join(segments, sep)
 
-	// Right segment: last action/status message
 	right := ""
 	if m.statusMessage != "" {
-		right = valStyle.Render(m.statusMessage)
+		right = dimStyle.Render(m.statusMessage)
 	}
 
-	// Calculate available space
 	leftWidth := lipgloss.Width(left)
 	rightWidth := lipgloss.Width(right)
-	padding := 2 // left padding
+	padding := 2
 
-	bar := ""
-	if width > 0 && leftWidth+rightWidth+len(sep)+padding < width {
+	bar := left
+	if width > 0 && leftWidth+rightWidth+padding < width {
 		gap := width - leftWidth - rightWidth - padding
 		if gap < 1 {
 			gap = 1
 		}
-		bar = left + strings.Repeat(" ", gap) + right
-	} else if width > 0 && leftWidth+padding < width {
-		bar = left
-	} else {
-		bar = left
+		bar = left + lipgloss.NewStyle().Background(lipgloss.Color(bg)).Render(strings.Repeat(" ", gap)) + right
 	}
 
 	return lipgloss.NewStyle().
 		PaddingLeft(1).
 		Width(width).
-		Background(lipgloss.Color(m.theme.Surface)).
+		Background(lipgloss.Color(bg)).
 		Render(bar)
 }
 
-func renderHelpBar(k keyMap, width int, theme config.ThemeColors) string {
-	keyStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(theme.BorderActive)).
-		Bold(true)
-	descStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(theme.TextMuted))
-	sepStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(theme.Border))
+func (m MainModel) renderFilterBar(width int) string {
+	bg := m.theme.Surface
+	prompt := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(m.theme.BorderActive)).
+		Background(lipgloss.Color(bg)).
+		Bold(true).
+		Render(" / ")
 
-	bindings := []key.Binding{
-		k.Up, k.Start, k.Enable, k.ToggleFollow, k.Quit,
-		k.Down, k.Stop, k.Disable, k.ToggleGroup, k.Help,
-		k.Filter, k.Restart, k.Edit, k.SwitchFocus, k.Create, k.ToggleSource,
-	}
+	// Style the underlying filter input to match the bar background.
+	m.list.FilterInput.TextStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(m.theme.Text)).
+		Background(lipgloss.Color(bg))
+	m.list.FilterInput.PlaceholderStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(m.theme.TextDim)).
+		Background(lipgloss.Color(bg))
+	m.list.FilterInput.Cursor.Style = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(m.theme.SurfaceDeep)).
+		Background(lipgloss.Color(m.theme.BorderActive))
 
-	var parts []string
-	for _, b := range bindings {
-		help := b.Help()
-		part := keyStyle.Render(help.Key) + " " + descStyle.Render(help.Desc)
-		parts = append(parts, part)
-	}
-
-	sep := sepStyle.Render(" • ")
-	line := strings.Join(parts, sep)
+	body := prompt + m.list.FilterInput.View()
 
 	return lipgloss.NewStyle().
 		Width(width).
+		Background(lipgloss.Color(bg)).
+		Render(body)
+}
+
+func renderHelpBar(k keyMap, width int, theme config.ThemeColors) string {
+	bg := theme.SurfaceDeep
+	descStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.TextMuted)).
+		Background(lipgloss.Color(bg))
+	sepStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.Border)).
+		Background(lipgloss.Color(bg))
+
+	row1 := []key.Binding{k.Up, k.Down, k.Filter, k.SwitchFocus, k.ToggleFollow, k.ToggleDetail}
+	row2 := []key.Binding{k.Start, k.Stop, k.Restart, k.Edit, k.Enable, k.Disable, k.ToggleGroup, k.ToggleSource, k.Create, k.Help, k.Quit}
+
+	sep := sepStyle.Render(" · ")
+
+	formatRow := func(bs []key.Binding) string {
+		parts := make([]string, 0, len(bs))
+		for _, b := range bs {
+			h := b.Help()
+			parts = append(parts, kbdChipBg(h.Key, theme, bg)+" "+descStyle.Render(h.Desc))
+		}
+		return strings.Join(parts, sep)
+	}
+
+	line1 := formatRow(row1)
+	line2 := formatRow(row2)
+
+	rowStyle := lipgloss.NewStyle().
+		Width(width).
 		PaddingLeft(1).
+		Background(lipgloss.Color(bg))
+
+	return lipgloss.JoinVertical(lipgloss.Left,
+		rowStyle.Render(line1),
+		rowStyle.Render(line2),
+	)
+}
+
+// --- Small style helpers --------------------------------------------------
+
+type hint struct {
+	key  string
+	desc string
+}
+
+func joinHints(hints []hint, theme config.ThemeColors) string {
+	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(theme.TextMuted))
+	sepStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(theme.Border))
+	parts := make([]string, 0, len(hints))
+	for _, h := range hints {
+		parts = append(parts, kbdChip(h.key, theme)+" "+descStyle.Render(h.desc))
+	}
+	return strings.Join(parts, sepStyle.Render("  ·  "))
+}
+
+// kbdChip renders a key as a small key-cap style chip on a transparent
+// background.
+func kbdChip(label string, theme config.ThemeColors) string {
+	return lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.Text)).
 		Background(lipgloss.Color(theme.Surface)).
-		Render(line)
+		Bold(true).
+		Padding(0, 1).
+		Render(label)
+}
+
+// kbdChipBg renders a key chip with an explicit outer background so the chip
+// sits inside a filled bar without ghosting.
+func kbdChipBg(label string, theme config.ThemeColors, _ string) string {
+	return lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.Accent)).
+		Background(lipgloss.Color(theme.Surface)).
+		Bold(true).
+		Padding(0, 1).
+		Render(label)
+}
+
+// chip renders a "label value" pill, e.g. `filter all` or `view status`.
+func chip(label, value, accent string, theme config.ThemeColors) string {
+	bg := theme.Surface
+	labelPart := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(accent)).
+		Background(lipgloss.Color(bg)).
+		Bold(true).
+		Render(label)
+	valPart := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.Text)).
+		Background(lipgloss.Color(bg)).
+		Render(value)
+	return lipgloss.NewStyle().
+		Background(lipgloss.Color(bg)).
+		Padding(0, 1).
+		Render(labelPart + " " + valPart)
+}
+
+// padBgLine right-pads `s` to `width` columns with a uniform background. It
+// preserves any styled content already in `s` and only paints the trailing
+// gap, which avoids the dark banding caused by nested bg styles.
+func padBgLine(s string, width int, bg string) string {
+	curr := ansi.StringWidth(s)
+	if curr >= width {
+		return s
+	}
+	pad := lipgloss.NewStyle().
+		Background(lipgloss.Color(bg)).
+		Render(strings.Repeat(" ", width-curr))
+	return s + pad
+}
+
+// padToWidth right-pads a string to width without applying any background.
+func padToWidth(s string, width int) string {
+	curr := ansi.StringWidth(s)
+	if curr >= width {
+		return s
+	}
+	return s + strings.Repeat(" ", width-curr)
 }
