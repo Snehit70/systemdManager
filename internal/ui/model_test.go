@@ -269,6 +269,24 @@ func TestStartFollowUsesConfiguredLogLines(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected follow command")
 	}
+	if mockClient.followOpts.Lines != 0 {
+		t.Fatalf("expected FollowLogs not to run synchronously, got %d", mockClient.followOpts.Lines)
+	}
+
+	msg := cmd()
+	started, ok := msg.(followStartedMsg)
+	if !ok {
+		t.Fatalf("expected followStartedMsg, got %T", msg)
+	}
+	if started.unit != "demo.service" {
+		t.Fatalf("expected unit demo.service, got %s", started.unit)
+	}
+	if started.ch == nil {
+		t.Fatal("expected follow channel")
+	}
+	if started.cancel == nil {
+		t.Fatal("expected follow cancel function")
+	}
 	if mockClient.followOpts.Lines != 123 {
 		t.Fatalf("expected configured log lines 123, got %d", mockClient.followOpts.Lines)
 	}

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -46,6 +47,14 @@ type detailContentMsg struct {
 type logLineMsg struct {
 	line string
 }
+
+type followStartedMsg struct {
+	unit   string
+	ch     <-chan string
+	cancel context.CancelFunc
+}
+
+type followStoppedMsg struct{}
 
 type tickMsg time.Time
 
@@ -190,36 +199,19 @@ func (m MainModel) editService(unit string) tea.Cmd {
 
 // Follow mode lifecycle.
 
-func (m *MainModel) startFollow(unit string) tea.Cmd {
-	lines := m.config.General.LogLines
-	if lines <= 0 {
-		lines = 50
-	}
-	logChan, cancel, err := m.client.FollowLogs(m.ctx, unit, client.LogOptions{Lines: lines})
-	if err != nil {
-		return func() tea.Msg {
+func (m MainModel) startFollow(unit string) tea.Cmd {
+	return func() tea.Msg {
+		lines := m.config.General.LogLines
+		if lines <= 0 {
+			lines = 50
+		}
+
+		logChan, cancel, err := m.client.FollowLogs(m.ctx, unit, client.LogOptions{Lines: lines})
+		if err != nil {
 			return errMsg{op: "Failed to follow logs", err: err}
 		}
-	}
 
-	m.following = true
-	m.followCancel = cancel
-	m.followLogChan = logChan
-	m.followLogLines = nil
-	m.followTrimmed = false
-
-	return func() tea.Msg {
-		select {
-		case line, ok := <-logChan:
-			if !ok {
-				m.stopFollow()
-				return nil
-			}
-			return logLineMsg{line: line}
-		case <-m.ctx.Done():
-			m.stopFollow()
-			return nil
-		}
+		return followStartedMsg{unit: unit, ch: logChan, cancel: cancel}
 	}
 }
 
@@ -234,22 +226,23 @@ func (m *MainModel) stopFollow() {
 	m.followTrimmed = false
 }
 
-func (m *MainModel) continueFollow(unit string) tea.Cmd {
+func (m MainModel) continueFollow(unit string) tea.Cmd {
 	if !m.following || m.followLogChan == nil {
 		return nil
 	}
 
+	ch := m.followLogChan
+	ctx := m.ctx
+
 	return func() tea.Msg {
 		select {
-		case line, ok := <-m.followLogChan:
+		case line, ok := <-ch:
 			if !ok {
-				m.stopFollow()
-				return nil
+				return followStoppedMsg{}
 			}
 			return logLineMsg{line: line}
-		case <-m.ctx.Done():
-			m.stopFollow()
-			return nil
+		case <-ctx.Done():
+			return followStoppedMsg{}
 		}
 	}
 }

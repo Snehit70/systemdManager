@@ -436,7 +436,7 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.statusMessage = "Stopped following (service changed)"
 					}
 					m.selectedSvc = svc.Name
-					cmds = append(cmds, m.fetchLogs(svc.Name))
+					cmds = append(cmds, m.fetchDetailContent(svc.Name))
 				}
 			}
 		}
@@ -506,7 +506,7 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if svc := m.getSelectedService(); svc != nil {
 				cmds = append(cmds, m.fetchDetailContent(svc.Name))
 			}
-			return m, nil
+			return m, tea.Batch(cmds...)
 		case key.Matches(msg, keys.ToggleFollow):
 			if m.following {
 				m.stopFollow()
@@ -609,7 +609,7 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							m.statusMessage = "Stopped following (service changed)"
 						}
 						m.selectedSvc = svc.Name
-						cmds = append(cmds, m.fetchLogs(svc.Name))
+						cmds = append(cmds, m.fetchDetailContent(svc.Name))
 					}
 				}
 			}
@@ -652,7 +652,7 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if svc := m.getSelectedService(); svc != nil {
 			m.selectedSvc = svc.Name
-			cmds = append(cmds, m.fetchLogs(svc.Name))
+			cmds = append(cmds, m.fetchDetailContent(svc.Name))
 		}
 
 	case actionResultMsg:
@@ -754,7 +754,22 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.viewport.SetContent(content)
 				m.viewport.GotoBottom()
 			}
-			cmd = m.continueFollow(m.selectedSvc)
+			cmds = append(cmds, m.continueFollow(m.selectedSvc))
+		}
+
+	case followStartedMsg:
+		m.following = true
+		m.followCancel = msg.cancel
+		m.followLogChan = msg.ch
+		m.followLogLines = nil
+		m.followTrimmed = false
+		m.selectedSvc = msg.unit
+		cmds = append(cmds, m.continueFollow(msg.unit))
+
+	case followStoppedMsg:
+		if m.following {
+			m.stopFollow()
+			m.statusMessage = "Stopped following logs"
 		}
 
 	case errMsg:

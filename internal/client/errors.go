@@ -49,16 +49,20 @@ func NewServiceError(op, unit string, cmdErr error) *ServiceError {
 		Unit: unit,
 		Err:  cmdErr,
 	}
+	if cmdErr == nil {
+		return err
+	}
 
 	var exitErr *exec.ExitError
 	if errors.As(cmdErr, &exitErr) {
 		err.Code = exitErr.ExitCode()
 	}
 
-	if strings.Contains(cmdErr.Error(), "not found") || strings.Contains(cmdErr.Error(), "could not be found") {
+	msg := strings.ToLower(cmdErr.Error())
+	if strings.Contains(msg, "not found") || strings.Contains(msg, "could not be found") {
 		err.Err = errors.Join(err.Err, ErrNotFound)
 	}
-	if strings.Contains(cmdErr.Error(), "permission denied") || strings.Contains(cmdErr.Error(), "Access denied") {
+	if strings.Contains(msg, "permission denied") || strings.Contains(msg, "access denied") {
 		err.Err = errors.Join(err.Err, ErrPermissionDenied)
 	}
 
@@ -66,6 +70,10 @@ func NewServiceError(op, unit string, cmdErr error) *ServiceError {
 }
 
 func UserErrorMessage(err *ServiceError) string {
+	if err == nil {
+		return "Unknown service error"
+	}
+
 	switch {
 	case errors.Is(err.Err, ErrNotFound):
 		return fmt.Sprintf("Service '%s' not found", err.Unit)
