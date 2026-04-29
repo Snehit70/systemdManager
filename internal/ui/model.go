@@ -508,8 +508,13 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case key.Matches(msg, keys.ToggleDetail):
 			m.detailViewMode = m.detailViewMode.Next()
-			if m.following && m.detailViewMode != detailViewLogs {
-				m.stopFollow()
+			if m.detailViewMode != detailViewLogs {
+				if m.following {
+					m.stopFollow()
+				} else if m.followPending {
+					m.followSessionID++ // invalidate in-flight startFollow
+					m.followPending = false
+				}
 			}
 			m.statusMessage = fmt.Sprintf("Detail view: %s", m.detailViewMode)
 			if svc := m.getSelectedService(); svc != nil {
