@@ -718,11 +718,14 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case detailContentMsg:
 		if msg.unit == m.selectedSvc && msg.mode == m.detailViewMode {
+			if m.following && m.detailViewMode == detailViewLogs {
+				break
+			}
 			m.viewport.SetContent(m.viewportWithScrollInfo(msg.content))
 		}
 
 	case logLineMsg:
-		if m.following && m.selectedSvc != "" && m.detailViewMode == detailViewLogs {
+		if m.following && m.selectedSvc != "" {
 			line := msg.line
 			maxLineBytes := 64 * 1024
 			if len(line) > maxLineBytes {
@@ -739,7 +742,12 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.followLogLines = m.followLogLines[len(m.followLogLines)-maxLines:]
 				m.followTrimmed = true
 			}
-			if svc := m.getSelectedService(); svc != nil {
+			if m.detailViewMode == detailViewLogs {
+				svc := m.getSelectedService()
+				if svc == nil {
+					cmds = append(cmds, m.continueFollow(m.selectedSvc))
+					break
+				}
 				trimNotice := ""
 				if m.followTrimmed {
 					trimNotice = "\n" + lipgloss.NewStyle().
