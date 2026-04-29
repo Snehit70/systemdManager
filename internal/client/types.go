@@ -79,6 +79,7 @@ type ServiceClient interface {
 	GetStatus(ctx context.Context, name string) (ServiceStatus, error)
 	GetLogs(ctx context.Context, name string, opts LogOptions) (string, error)
 	GetConfig(ctx context.Context, name string) (string, error)
+	GetStatusDetails(ctx context.Context, name string) (string, error)
 
 	// FollowLogs returns a channel that emits log lines.
 	// Call the returned cancel function to stop the stream.

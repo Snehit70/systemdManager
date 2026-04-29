@@ -21,7 +21,10 @@ func main() {
 	client := service.NewSystemdClient(cfg)
 
 	m := ui.NewMainModel(client, cfg)
-	p := tea.NewProgram(m, tea.WithAltScreen())
+	p := tea.NewProgram(m,
+		tea.WithAltScreen(),
+		tea.WithMouseCellMotion(),
+	)
 
 	if _, err := p.Run(); err != nil {
 		fmt.Printf("Alas, there's been an error: %v", err)

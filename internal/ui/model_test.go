@@ -14,7 +14,10 @@ import (
 var _ client.ServiceClient = (*mockServiceClient)(nil)
 
 type mockServiceClient struct {
-	services []client.Service
+	services    []client.Service
+	createCalls int
+	createErr   error
+	followOpts  client.LogOptions
 }
 
 func (m *mockServiceClient) ListServices(ctx context.Context) ([]client.Service, error) {
@@ -35,18 +38,23 @@ func (m *mockServiceClient) GetLogs(ctx context.Context, name string, opts clien
 func (m *mockServiceClient) GetConfig(ctx context.Context, name string) (string, error) {
 	return "[Service]", nil
 }
+func (m *mockServiceClient) GetStatusDetails(ctx context.Context, name string) (string, error) {
+	return "● test.service - Mock Status", nil
+}
 func (m *mockServiceClient) EditService(ctx context.Context, name string) (*exec.Cmd, error) {
 	cmd := exec.Command("true")
 	return cmd, nil
 }
 func (m *mockServiceClient) ReloadDaemon(ctx context.Context) error { return nil }
 func (m *mockServiceClient) FollowLogs(ctx context.Context, name string, opts client.LogOptions) (<-chan string, context.CancelFunc, error) {
+	m.followOpts = opts
 	ch := make(chan string)
 	cancel := func() { close(ch) }
 	return ch, cancel, nil
 }
 func (m *mockServiceClient) CreateService(ctx context.Context, tmpl client.ServiceTemplate) error {
-	return nil
+	m.createCalls++
+	return m.createErr
 }
 
 func newTestModel() MainModel {
@@ -207,5 +215,79 @@ func TestServiceLoadingPopulatesList(t *testing.T) {
 	// Verify status message
 	if m.statusMessage != "Loaded 2 services (1 user-created)" {
 		t.Errorf("Expected 'Loaded 2 services (1 user-created)', got '%s'", m.statusMessage)
+	}
+}
+
+func TestCreateServiceFromModalRunsAsync(t *testing.T) {
+	mockClient := &mockServiceClient{}
+	model := NewMainModel(mockClient, config.Default())
+	model.showCreate = true
+	model.createModal = newCreateModal()
+	model.createModal.nameInput.SetValue("demo")
+	model.createModal.execInput.SetValue("/bin/true")
+
+	updatedModel, cmd := model.createServiceFromModal()
+	m := updatedModel.(MainModel)
+
+	if cmd == nil {
+		t.Fatal("expected create command")
+	}
+	if mockClient.createCalls != 0 {
+		t.Fatalf("expected create not to run synchronously, got %d calls", mockClient.createCalls)
+	}
+	if !m.creating {
+		t.Fatal("expected creating state while command is pending")
+	}
+
+	msg := cmd()
+	if mockClient.createCalls != 1 {
+		t.Fatalf("expected create command to run once, got %d calls", mockClient.createCalls)
+	}
+
+	updatedModel, _ = m.Update(msg)
+	m = updatedModel.(MainModel)
+
+	if m.creating {
+		t.Fatal("expected creating state to clear after result")
+	}
+	if m.showCreate {
+		t.Fatal("expected modal to close after successful creation")
+	}
+	if m.statusMessage != "Created service: demo" {
+		t.Fatalf("unexpected status message: %q", m.statusMessage)
+	}
+}
+
+func TestStartFollowUsesConfiguredLogLines(t *testing.T) {
+	mockClient := &mockServiceClient{}
+	cfg := config.Default()
+	cfg.General.LogLines = 123
+	model := NewMainModel(mockClient, cfg)
+
+	cmd := model.startFollow("demo.service", 1)
+
+	if cmd == nil {
+		t.Fatal("expected follow command")
+	}
+	if mockClient.followOpts.Lines != 0 {
+		t.Fatalf("expected FollowLogs not to run synchronously, got %d", mockClient.followOpts.Lines)
+	}
+
+	msg := cmd()
+	started, ok := msg.(followStartedMsg)
+	if !ok {
+		t.Fatalf("expected followStartedMsg, got %T", msg)
+	}
+	if started.unit != "demo.service" {
+		t.Fatalf("expected unit demo.service, got %s", started.unit)
+	}
+	if started.ch == nil {
+		t.Fatal("expected follow channel")
+	}
+	if started.cancel == nil {
+		t.Fatal("expected follow cancel function")
+	}
+	if mockClient.followOpts.Lines != 123 {
+		t.Fatalf("expected configured log lines 123, got %d", mockClient.followOpts.Lines)
 	}
 }

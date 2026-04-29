@@ -133,13 +133,57 @@ func TestUnitJSONParsingInvalidJSON(t *testing.T) {
 	}
 }
 
+func TestCommandErrorIncludesCommandOutput(t *testing.T) {
+	err := commandError("systemctl start", errors.New("exit status 1"), []byte("Unit demo.service not found\n"))
+
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if got := err.Error(); got != "systemctl start: exit status 1: Unit demo.service not found" {
+		t.Fatalf("unexpected error: %q", got)
+	}
+}
+
+func TestSanitizeServiceName(t *testing.T) {
+	c := &systemdClient{}
+
+	tests := []struct {
+		name string
+		want string
+	}{
+		{name: "demo", want: "demo.service"},
+		{name: "demo@worker.service", want: "demo@worker.service"},
+		{name: "../demo", want: ""},
+		{name: "bad name", want: ""},
+		{name: "bad/name", want: ""},
+		{name: "..", want: ""},
+	}
+
+	for _, tt := range tests {
+		if got := c.sanitizeServiceName(tt.name); got != tt.want {
+			t.Fatalf("sanitizeServiceName(%q) = %q, want %q", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestSanitizeTemplateRequiresExecStart(t *testing.T) {
+	c := &systemdClient{}
+	tmpl := client.ServiceTemplate{Name: "demo.service"}
+
+	if err := c.sanitizeTemplate(&tmpl); err == nil {
+		t.Fatal("expected missing ExecStart to fail validation")
+	}
+}
+
 // Interface compliance test
 var _ client.ServiceClient = (*systemdClient)(nil)
 
 // Mock implementations for testing
 type mockSystemdClient struct{}
 
-func (m *mockSystemdClient) ListServices() ([]client.Service, error) {
+var _ client.ServiceClient = (*mockSystemdClient)(nil)
+
+func (m *mockSystemdClient) ListServices(ctx context.Context) ([]client.Service, error) {
 	return []client.Service{
 		{
 			Name:        "test.service",
@@ -152,85 +196,98 @@ func (m *mockSystemdClient) ListServices() ([]client.Service, error) {
 	}, nil
 }
 
-func (m *mockSystemdClient) StartService(name string) error {
+func (m *mockSystemdClient) StartService(ctx context.Context, name string) error {
 	if name == "error.service" {
 		return errors.New("failed to start")
 	}
 	return nil
 }
 
-func (m *mockSystemdClient) StopService(name string) error {
+func (m *mockSystemdClient) StopService(ctx context.Context, name string) error {
 	if name == "error.service" {
 		return errors.New("failed to stop")
 	}
 	return nil
 }
 
-func (m *mockSystemdClient) RestartService(name string) error {
+func (m *mockSystemdClient) RestartService(ctx context.Context, name string) error {
 	if name == "error.service" {
 		return errors.New("failed to restart")
 	}
 	return nil
 }
 
-func (m *mockSystemdClient) EnableService(name string) error {
+func (m *mockSystemdClient) EnableService(ctx context.Context, name string) error {
 	if name == "error.service" {
 		return errors.New("failed to enable")
 	}
 	return nil
 }
 
-func (m *mockSystemdClient) DisableService(name string) error {
+func (m *mockSystemdClient) DisableService(ctx context.Context, name string) error {
 	if name == "error.service" {
 		return errors.New("failed to disable")
 	}
 	return nil
 }
 
-func (m *mockSystemdClient) GetStatus(name string) (client.ServiceStatus, error) {
+func (m *mockSystemdClient) GetStatus(ctx context.Context, name string) (client.ServiceStatus, error) {
 	if name == "error.service" {
 		return "", errors.New("failed to get status")
 	}
 	return "active", nil
 }
 
-func (m *mockSystemdClient) GetLogs(name string, opts client.LogOptions) (string, error) {
+func (m *mockSystemdClient) GetLogs(ctx context.Context, name string, opts client.LogOptions) (string, error) {
 	if name == "error.service" {
 		return "", errors.New("failed to get logs")
 	}
 	return "Mock log output", nil
 }
 
-func (m *mockSystemdClient) GetConfig(name string) (string, error) {
+func (m *mockSystemdClient) GetConfig(ctx context.Context, name string) (string, error) {
 	if name == "error.service" {
 		return "", errors.New("failed to get config")
 	}
 	return "[Service]\nExecStart=/bin/true", nil
 }
 
-func (m *mockSystemdClient) EditService(name string) (*exec.Cmd, error) {
+func (m *mockSystemdClient) GetStatusDetails(ctx context.Context, name string) (string, error) {
+	if name == "error.service" {
+		return "", errors.New("failed to get status details")
+	}
+	return "● test.service - Test Service\n   Active: active (running)", nil
+}
+
+func (m *mockSystemdClient) EditService(ctx context.Context, name string) (*exec.Cmd, error) {
 	if name == "error.service" {
 		return nil, errors.New("failed to edit")
 	}
-	// Return a command that does nothing for tests
 	cmd := exec.Command("true")
 	return cmd, nil
 }
 
-func (m *mockSystemdClient) ReloadDaemon() error {
+func (m *mockSystemdClient) ReloadDaemon(ctx context.Context) error {
 	if os.Getenv("SYSTEMD_TUI_TEST_FAIL_RELOAD") == "1" {
 		return errors.New("failed to reload daemon")
 	}
 	return nil
 }
 
-func (m *mockSystemdClient) FollowLogs(name string, opts client.LogOptions) (<-chan string, context.CancelFunc, error) {
+func (m *mockSystemdClient) FollowLogs(ctx context.Context, name string, opts client.LogOptions) (<-chan string, context.CancelFunc, error) {
 	if name == "error.service" {
 		return nil, nil, errors.New("failed to follow logs")
 	}
 	ch := make(chan string)
 	cancel := func() { close(ch) }
 	return ch, cancel, nil
+}
+
+func (m *mockSystemdClient) CreateService(ctx context.Context, tmpl client.ServiceTemplate) error {
+	if tmpl.Name == "" {
+		return errors.New("name is required")
+	}
+	return nil
 }
 
 // Tests for systemdClient implementation
@@ -259,7 +316,8 @@ func TestSystemdClient_ReloadDaemon(t *testing.T) {
 // Mock tests - these verify the interface can be implemented
 func TestMockSystemdClient_ListServices(t *testing.T) {
 	mock := &mockSystemdClient{}
-	services, err := mock.ListServices()
+	ctx := context.Background()
+	services, err := mock.ListServices(ctx)
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
@@ -273,30 +331,37 @@ func TestMockSystemdClient_ListServices(t *testing.T) {
 
 func TestMockSystemdClient_Actions(t *testing.T) {
 	mock := &mockSystemdClient{}
+	ctx := context.Background()
 
 	// Test successful actions
-	for _, action := range []func(string) error{
-		mock.StartService,
-		mock.StopService,
-		mock.RestartService,
-		mock.EnableService,
-		mock.DisableService,
-	} {
-		if err := action("test.service"); err != nil {
-			t.Errorf("Action %T failed: %v", action, err)
+	actions := []struct {
+		name string
+		fn   func(context.Context, string) error
+	}{
+		{"Start", mock.StartService},
+		{"Stop", mock.StopService},
+		{"Restart", mock.RestartService},
+		{"Enable", mock.EnableService},
+		{"Disable", mock.DisableService},
+	}
+
+	for _, a := range actions {
+		if err := a.fn(ctx, "test.service"); err != nil {
+			t.Errorf("%s failed: %v", a.name, err)
 		}
 	}
 
 	// Test error case
-	if err := mock.StartService("error.service"); err == nil {
+	if err := mock.StartService(ctx, "error.service"); err == nil {
 		t.Error("Expected error for error.service")
 	}
 }
 
 func TestMockSystemdClient_GetStatus(t *testing.T) {
 	mock := &mockSystemdClient{}
+	ctx := context.Background()
 
-	status, err := mock.GetStatus("test.service")
+	status, err := mock.GetStatus(ctx, "test.service")
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
@@ -304,7 +369,7 @@ func TestMockSystemdClient_GetStatus(t *testing.T) {
 		t.Errorf("Expected status 'active', got '%s'", status)
 	}
 
-	_, err = mock.GetStatus("error.service")
+	_, err = mock.GetStatus(ctx, "error.service")
 	if err == nil {
 		t.Error("Expected error for error.service")
 	}
@@ -312,8 +377,9 @@ func TestMockSystemdClient_GetStatus(t *testing.T) {
 
 func TestMockSystemdClient_GetLogs(t *testing.T) {
 	mock := &mockSystemdClient{}
+	ctx := context.Background()
 
-	logs, err := mock.GetLogs("test.service", client.LogOptions{Lines: 50})
+	logs, err := mock.GetLogs(ctx, "test.service", client.LogOptions{Lines: 50})
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
@@ -321,7 +387,7 @@ func TestMockSystemdClient_GetLogs(t *testing.T) {
 		t.Errorf("Unexpected logs: %s", logs)
 	}
 
-	_, err = mock.GetLogs("error.service", client.LogOptions{})
+	_, err = mock.GetLogs(ctx, "error.service", client.LogOptions{})
 	if err == nil {
 		t.Error("Expected error for error.service")
 	}
@@ -329,8 +395,9 @@ func TestMockSystemdClient_GetLogs(t *testing.T) {
 
 func TestMockSystemdClient_GetConfig(t *testing.T) {
 	mock := &mockSystemdClient{}
+	ctx := context.Background()
 
-	config, err := mock.GetConfig("test.service")
+	config, err := mock.GetConfig(ctx, "test.service")
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
@@ -338,7 +405,7 @@ func TestMockSystemdClient_GetConfig(t *testing.T) {
 		t.Error("Expected non-empty config")
 	}
 
-	_, err = mock.GetConfig("error.service")
+	_, err = mock.GetConfig(ctx, "error.service")
 	if err == nil {
 		t.Error("Expected error for error.service")
 	}
@@ -346,8 +413,9 @@ func TestMockSystemdClient_GetConfig(t *testing.T) {
 
 func TestMockSystemdClient_EditService(t *testing.T) {
 	mock := &mockSystemdClient{}
+	ctx := context.Background()
 
-	cmd, err := mock.EditService("test.service")
+	cmd, err := mock.EditService(ctx, "test.service")
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
@@ -355,7 +423,7 @@ func TestMockSystemdClient_EditService(t *testing.T) {
 		t.Error("Expected non-nil command")
 	}
 
-	_, err = mock.EditService("error.service")
+	_, err = mock.EditService(ctx, "error.service")
 	if err == nil {
 		t.Error("Expected error for error.service")
 	}
@@ -363,15 +431,16 @@ func TestMockSystemdClient_EditService(t *testing.T) {
 
 func TestMockSystemdClient_ReloadDaemon(t *testing.T) {
 	mock := &mockSystemdClient{}
+	ctx := context.Background()
 
-	if err := mock.ReloadDaemon(); err != nil {
+	if err := mock.ReloadDaemon(ctx); err != nil {
 		t.Errorf("Unexpected error: %v", err)
 	}
 
 	os.Setenv("SYSTEMD_TUI_TEST_FAIL_RELOAD", "1")
 	defer os.Unsetenv("SYSTEMD_TUI_TEST_FAIL_RELOAD")
 
-	if err := mock.ReloadDaemon(); err == nil {
+	if err := mock.ReloadDaemon(ctx); err == nil {
 		t.Error("Expected error when fail reload is set")
 	}
 }

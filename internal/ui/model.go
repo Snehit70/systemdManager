@@ -2,9 +2,9 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"systemd-tui/internal/client"
 	"systemd-tui/internal/config"
@@ -54,6 +54,9 @@ type keyMap struct {
 	Create       key.Binding
 	Quit         key.Binding
 	Help         key.Binding
+	ToggleDetail key.Binding
+	ShrinkPanel  key.Binding
+	GrowPanel    key.Binding
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
@@ -65,40 +68,9 @@ func (k keyMap) FullHelp() [][]key.Binding {
 		{k.Up, k.Down, k.Filter, k.SwitchFocus},
 		{k.Start, k.Stop, k.Restart, k.Edit},
 		{k.Enable, k.Disable, k.ToggleFollow, k.ToggleGroup},
-		{k.Create, k.ToggleSource, k.Quit, k.Help},
+		{k.Create, k.ToggleSource, k.ToggleDetail, k.Quit},
+		{k.ShrinkPanel, k.GrowPanel, k.Help},
 	}
-}
-
-func renderHelpBar(k keyMap, width int, theme config.ThemeColors) string {
-	keyStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(theme.BorderActive)).
-		Bold(true)
-	descStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(theme.TextMuted))
-	sepStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(theme.Border))
-
-	bindings := []key.Binding{
-		k.Up, k.Start, k.Enable, k.ToggleFollow, k.Quit,
-		k.Down, k.Stop, k.Disable, k.ToggleGroup, k.Help,
-		k.Filter, k.Restart, k.Edit, k.SwitchFocus, k.Create, k.ToggleSource,
-	}
-
-	var parts []string
-	for _, b := range bindings {
-		help := b.Help()
-		part := keyStyle.Render(help.Key) + " " + descStyle.Render(help.Desc)
-		parts = append(parts, part)
-	}
-
-	sep := sepStyle.Render(" • ")
-	line := strings.Join(parts, sep)
-
-	return lipgloss.NewStyle().
-		Width(width).
-		PaddingLeft(1).
-		Background(lipgloss.Color(theme.Surface)).
-		Render(line)
 }
 
 var keys = keyMap{
@@ -166,12 +138,47 @@ var keys = keyMap{
 		key.WithKeys("?"),
 		key.WithHelp("?", "help"),
 	),
+	ToggleDetail: key.NewBinding(
+		key.WithKeys("t"),
+		key.WithHelp("t", "toggle detail view"),
+	),
+	ShrinkPanel: key.NewBinding(
+		key.WithKeys("["),
+		key.WithHelp("[", "shrink list"),
+	),
+	GrowPanel: key.NewBinding(
+		key.WithKeys("]"),
+		key.WithHelp("]", "grow list"),
+	),
 }
 
 const (
 	listView = iota
 	detailView
 )
+
+type detailViewMode int
+
+const (
+	detailViewLogs detailViewMode = iota
+	detailViewStatus
+	detailViewConfig
+)
+
+func (d detailViewMode) String() string {
+	switch d {
+	case detailViewStatus:
+		return "status"
+	case detailViewConfig:
+		return "config"
+	default:
+		return "logs"
+	}
+}
+
+func (d detailViewMode) Next() detailViewMode {
+	return (d + 1) % 3
+}
 
 type groupMode int
 
@@ -232,19 +239,23 @@ type createModal struct {
 func newCreateModal() createModal {
 	name := textinput.New()
 	name.Placeholder = "my-service"
+	name.Prompt = ""
 	name.Focus()
 	name.CharLimit = 100
 
 	exec := textinput.New()
 	exec.Placeholder = "/path/to/command --args"
+	exec.Prompt = ""
 	exec.CharLimit = 500
 
 	desc := textinput.New()
 	desc.Placeholder = "Service description"
+	desc.Prompt = ""
 	desc.CharLimit = 200
 
 	workdir := textinput.New()
 	workdir.Placeholder = "~"
+	workdir.Prompt = ""
 	workdir.CharLimit = 200
 
 	return createModal{
@@ -275,19 +286,26 @@ type MainModel struct {
 	confirmingAction string
 	confirmingUnit   string
 
-	following      bool
-	followCancel   context.CancelFunc
-	followLogLines []string
+	following       bool
+	followPending   bool
+	followSessionID uint64
+	followCancel    context.CancelFunc
+	followLogChan   <-chan string
+	followLogLines  []string
+	followTrimmed   bool
 
-	groupMode  groupMode
-	filterMode filterMode
+	groupMode      groupMode
+	filterMode     filterMode
+	detailViewMode detailViewMode
 
 	createModal createModal
 	showCreate  bool
+	creating    bool
 
 	activeBorder   lipgloss.Style
 	inactiveBorder lipgloss.Style
 	detailStyle    lipgloss.Style
+	splitRatio     float64
 }
 
 func NewMainModel(client client.ServiceClient, cfg *config.Config) MainModel {
@@ -299,6 +317,21 @@ func NewMainModel(client client.ServiceClient, cfg *config.Config) MainModel {
 	l.SetShowHelp(false)
 	l.SetShowFilter(false)
 	l.SetShowStatusBar(false)
+
+	// Override the default bubbles list title (purple bg, white fg) with a
+	// theme-aware accent strip that fits the rest of the UI.
+	l.Styles.Title = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.BorderActive)).
+		Bold(true).
+		Padding(0, 1).
+		Border(lipgloss.NormalBorder(), false, false, true, false).
+		BorderForeground(lipgloss.Color(theme.Border))
+	l.Styles.NoItems = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.TextDim)).
+		Padding(0, 1)
+	l.Styles.PaginationStyle = lipgloss.NewStyle().
+		Foreground(lipgloss.Color(theme.TextDim)).
+		Padding(0, 1)
 
 	listKeys := list.DefaultKeyMap()
 	listKeys.Quit = key.NewBinding(key.WithKeys("ctrl+c"))
@@ -329,6 +362,7 @@ func NewMainModel(client client.ServiceClient, cfg *config.Config) MainModel {
 		inactiveBorder: inactive,
 		detailStyle:    lipgloss.NewStyle().PaddingLeft(1),
 		ctx:            context.Background(),
+		splitRatio:     0.33,
 	}
 }
 
@@ -336,14 +370,24 @@ func (m MainModel) Init() tea.Cmd {
 	return tea.Batch(m.fetchServices, m.tick())
 }
 
-func (m MainModel) tick() tea.Cmd {
-	interval := m.config.General.RefreshInterval
-	if interval <= 0 {
-		interval = 2 * time.Second
+func (m *MainModel) recalcPanelSizes() {
+	helpHeight := 2
+	statusBarHeight := 1
+	mainHeight := m.height - helpHeight - statusBarHeight
+
+	listWidth := int(float64(m.width) * m.splitRatio)
+	if listWidth < 20 {
+		listWidth = 20
 	}
-	return tea.Tick(interval, func(t time.Time) tea.Msg {
-		return tickMsg(t)
-	})
+	detailWidth := m.width - listWidth - 4
+	if detailWidth < 20 {
+		detailWidth = 20
+	}
+
+	m.list.SetSize(listWidth-2, mainHeight-2)
+	m.viewport.Width = detailWidth - 2
+	m.viewport.Height = mainHeight - 2
+	m.help.Width = m.width
 }
 
 func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -354,22 +398,56 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-
-		helpHeight := 2
-		statusBarHeight := 1
-		mainHeight := m.height - helpHeight - statusBarHeight
-
-		listWidth := m.width / 3
-		detailWidth := m.width - listWidth - 4
-
-		m.list.SetSize(listWidth-2, mainHeight-2)
-		m.viewport.Width = detailWidth - 2
-		m.viewport.Height = mainHeight - 2
-		m.help.Width = m.width
+		m.recalcPanelSizes()
 
 	case list.FilterMatchesMsg:
 		m.list, cmd = m.list.Update(msg)
 		return m, cmd
+
+	case tea.MouseMsg:
+		// Determine which pane the mouse is over and route the event.
+		// Layout: list pane on the left of width listWidth, then detail pane.
+		listWidth := int(float64(m.width) * m.splitRatio)
+		if listWidth < 20 {
+			listWidth = 20
+		}
+		// The list pane occupies columns [0, listWidth] roughly; clicks beyond
+		// that fall in the detail pane.
+		inDetailPane := msg.X >= listWidth
+
+		if msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonLeft {
+			if inDetailPane {
+				m.activeView = detailView
+			} else {
+				m.activeView = listView
+			}
+		}
+
+		if inDetailPane {
+			m.viewport, cmd = m.viewport.Update(msg)
+		} else {
+			var prevItem list.Item
+			if m.list.SelectedItem() != nil {
+				prevItem = m.list.SelectedItem()
+			}
+			m.list, cmd = m.list.Update(msg)
+			if svc := m.getSelectedService(); svc != nil {
+				currItem := m.list.SelectedItem()
+				if prevItem == nil || currItem.FilterValue() != prevItem.FilterValue() {
+					if m.following {
+						m.stopFollow()
+						m.statusMessage = "Stopped following (service changed)"
+					} else if m.followPending {
+						m.followSessionID++ // invalidate in-flight startFollow
+						m.followPending = false
+					}
+					m.selectedSvc = svc.Name
+					cmds = append(cmds, m.fetchDetailContent(svc.Name))
+				}
+			}
+		}
+		cmds = append(cmds, cmd)
+		return m, tea.Batch(cmds...)
 
 	case tea.KeyMsg:
 		if m.list.FilterState() == list.Filtering {
@@ -428,13 +506,31 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, keys.Help):
 			m.help.ShowAll = !m.help.ShowAll
 			return m, nil
+		case key.Matches(msg, keys.ToggleDetail):
+			m.detailViewMode = m.detailViewMode.Next()
+			if m.detailViewMode != detailViewLogs {
+				if m.following {
+					m.stopFollow()
+				} else if m.followPending {
+					m.followSessionID++ // invalidate in-flight startFollow
+					m.followPending = false
+				}
+			}
+			m.statusMessage = fmt.Sprintf("Detail view: %s", m.detailViewMode)
+			if svc := m.getSelectedService(); svc != nil {
+				cmds = append(cmds, m.fetchDetailContent(svc.Name))
+			}
+			return m, tea.Batch(cmds...)
 		case key.Matches(msg, keys.ToggleFollow):
 			if m.following {
 				m.stopFollow()
 				m.statusMessage = "Stopped following logs"
-			} else {
+			} else if !m.followPending {
 				if svc := m.getSelectedService(); svc != nil {
-					cmd = m.startFollow(svc.Name)
+					m.detailViewMode = detailViewLogs
+					m.followSessionID++
+					m.followPending = true
+					cmd = m.startFollow(svc.Name, m.followSessionID)
 					m.statusMessage = "Following logs for " + svc.Name
 					return m, cmd
 				}
@@ -443,12 +539,30 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, keys.ToggleGroup):
 			m.groupMode = m.groupMode.Next()
 			m.statusMessage = fmt.Sprintf("Group by: %s", m.groupMode)
+			m.updateListTitle()
 			cmds = append(cmds, m.list.SetItems(m.buildListItems()))
 
 		case key.Matches(msg, keys.ToggleSource):
 			m.filterMode = m.filterMode.Next()
 			m.statusMessage = fmt.Sprintf("Filter: %s", m.filterMode)
+			m.updateListTitle()
 			cmds = append(cmds, m.list.SetItems(m.buildListItems()))
+
+		case key.Matches(msg, keys.ShrinkPanel):
+			m.splitRatio -= 0.05
+			if m.splitRatio < 0.15 {
+				m.splitRatio = 0.15
+			}
+			m.recalcPanelSizes()
+			return m, nil
+
+		case key.Matches(msg, keys.GrowPanel):
+			m.splitRatio += 0.05
+			if m.splitRatio > 0.70 {
+				m.splitRatio = 0.70
+			}
+			m.recalcPanelSizes()
+			return m, nil
 
 		case key.Matches(msg, keys.Create):
 			m.showCreate = true
@@ -507,8 +621,15 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if svc := m.getSelectedService(); svc != nil {
 					currItem := m.list.SelectedItem()
 					if prevItem == nil || currItem.FilterValue() != prevItem.FilterValue() {
+						if m.following {
+							m.stopFollow()
+							m.statusMessage = "Stopped following (service changed)"
+						} else if m.followPending {
+							m.followSessionID++ // invalidate in-flight startFollow
+							m.followPending = false
+						}
 						m.selectedSvc = svc.Name
-						cmds = append(cmds, m.fetchLogs(svc.Name))
+						cmds = append(cmds, m.fetchDetailContent(svc.Name))
 					}
 				}
 			}
@@ -527,330 +648,189 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.statusMessage = fmt.Sprintf("Loaded %d services (%d user-created)", len(msg), userCount)
 
+		filtered := m.filteredServices()
+		filteredCount := len(filtered)
+		totalCount := len(m.services)
+		if filteredCount != totalCount {
+			m.list.Title = fmt.Sprintf("User Services (%d/%d)", filteredCount, totalCount)
+		} else {
+			m.list.Title = fmt.Sprintf("User Services (%d)", totalCount)
+		}
+
 		items := m.buildListItems()
 		cmds = append(cmds, m.list.SetItems(items))
 
+		if m.selectedSvc == "" && len(items) > 0 {
+			for i, it := range items {
+				if _, ok := it.(item); ok {
+					m.list.Select(i)
+					m.selectedSvc = it.FilterValue()
+					break
+				}
+			}
+		}
+
 		if svc := m.getSelectedService(); svc != nil {
-			cmds = append(cmds, m.fetchLogs(svc.Name))
+			m.selectedSvc = svc.Name
+			cmds = append(cmds, m.fetchDetailContent(svc.Name))
 		}
 
 	case actionResultMsg:
 		m.statusMessage = msg.message
 		if msg.err != nil {
-			m.statusMessage = "Error: " + msg.err.Error()
+			m.statusMessage = "Error: " + renderUserError(msg.err)
 		} else {
+			cmds = append(cmds, m.fetchServices)
+		}
+
+	case createServiceResultMsg:
+		m.creating = false
+		if msg.err != nil {
+			m.statusMessage = "Failed to create service: " + renderUserError(msg.err)
+			m.showCreate = true
+		} else {
+			m.showCreate = false
+			m.statusMessage = fmt.Sprintf("Created service: %s", msg.name)
 			cmds = append(cmds, m.fetchServices)
 		}
 
 	case editorFinishedMsg:
 		if msg.err != nil {
-			m.statusMessage = "Edit failed: " + msg.err.Error()
+			m.statusMessage = "Edit failed: " + renderUserError(msg.err)
 		} else {
-			if err := m.client.ReloadDaemon(m.ctx); err != nil {
-				m.statusMessage = "Edit saved, but reload failed: " + err.Error()
-			} else {
-				m.statusMessage = "Edit saved. Reloaded daemon."
-				cmds = append(cmds, m.fetchServices)
-			}
+			m.statusMessage = "Edit saved. Reloading daemon..."
+			cmds = append(cmds, m.reloadDaemon())
 		}
 		return m, tea.Batch(cmds...)
 
+	case reloadDaemonResultMsg:
+		if msg.err != nil {
+			m.statusMessage = "Edit saved, but reload failed: " + msg.err.Error()
+		} else {
+			m.statusMessage = "Edit saved. Reloaded daemon."
+			cmds = append(cmds, m.fetchServices)
+		}
+
 	case logMsg:
-		if msg.unit == m.selectedSvc && !m.following {
+		if msg.unit == m.selectedSvc && !m.following && m.detailViewMode == detailViewLogs {
 			if svc := m.getSelectedService(); svc != nil {
 				lines := m.config.General.LogLines
 				if lines <= 0 {
 					lines = 50
 				}
-				var content string
+				var body string
+				banner := fmt.Sprintf("Last %d lines", lines)
 				if msg.err != nil {
-					content = fmt.Sprintf(
-						"Service: %s\nStatus: %s (%s)\nDescription: %s\n\n[Log Error]\n%s",
-						svc.Name, svc.Status, svc.Sub, svc.Description, msg.err.Error(),
-					)
+					banner = "Log error"
+					body = lipgloss.NewStyle().
+						Foreground(lipgloss.Color(m.theme.StatusFailed)).
+						Render(renderUserError(msg.err))
 				} else {
-					content = fmt.Sprintf(
-						"Service: %s\nStatus: %s (%s)\nDescription: %s\n\n[Last %d Lines of Log]\n%s",
-						svc.Name, svc.Status, svc.Sub, svc.Description, lines, msg.logs,
-					)
+					body = styleLogContent(msg.logs, m.theme)
 				}
-				m.viewport.SetContent(content)
+				header := renderDetailHeader(m.theme,
+					svc.Name, string(svc.Status), svc.Sub, string(svc.Source),
+					svc.Description, banner, m.viewport.Width)
+				content := header + "\n" + body
+				m.viewport.SetContent(m.viewportWithScrollInfo(content))
 			}
 		}
 
+	case detailContentMsg:
+		if msg.unit == m.selectedSvc && msg.mode == m.detailViewMode {
+			if m.following && m.detailViewMode == detailViewLogs {
+				break
+			}
+			if msg.err != nil {
+				m.statusMessage = fmt.Sprintf("Failed to load %s for %s: %s", msg.mode, msg.unit, renderUserError(msg.err))
+				break
+			}
+			m.viewport.SetContent(m.viewportWithScrollInfo(msg.content))
+		}
+
 	case logLineMsg:
-		if m.following {
-			m.followLogLines = append(m.followLogLines, msg.line)
-			maxLines := 1000
+		if m.following && msg.id == m.followSessionID && m.selectedSvc != "" {
+			line := msg.line
+			maxLineBytes := 64 * 1024
+			if len(line) > maxLineBytes {
+				line = line[:maxLineBytes] + "... [truncated]"
+				m.followTrimmed = true
+			}
+
+			m.followLogLines = append(m.followLogLines, line)
+			maxLines := m.config.General.MaxFollowLines
+			if maxLines <= 0 {
+				maxLines = 1000
+			}
 			if len(m.followLogLines) > maxLines {
 				m.followLogLines = m.followLogLines[len(m.followLogLines)-maxLines:]
+				m.followTrimmed = true
 			}
-			if svc := m.getSelectedService(); svc != nil {
-				content := fmt.Sprintf(
-					"Service: %s\nStatus: %s (%s)\nDescription: %s\n\n[FOLLOWING - Press f to stop]\n%s",
-					svc.Name, svc.Status, svc.Sub, svc.Description,
-					strings.Join(m.followLogLines, "\n"),
-				)
+			if m.detailViewMode == detailViewLogs {
+				svc := m.getSelectedService()
+				if svc == nil {
+					cmds = append(cmds, m.continueFollow(m.selectedSvc, msg.id))
+					break
+				}
+				trimNotice := ""
+				if m.followTrimmed {
+					trimNotice = "\n" + lipgloss.NewStyle().
+						Foreground(lipgloss.Color(m.theme.TextDim)).
+						Italic(true).
+						Render(fmt.Sprintf("buffer trimmed — showing last %d lines", maxLines)) + "\n"
+				}
+				styledFollowLogs := styleLogContent(strings.Join(m.followLogLines, "\n"), m.theme)
+
+				// Header without the standard banner; followBanner replaces it.
+				header := renderDetailHeader(m.theme,
+					svc.Name, string(svc.Status), svc.Sub, string(svc.Source),
+					svc.Description, "", m.viewport.Width)
+				banner := followBanner(m.theme, m.viewport.Width)
+				content := header + banner + "\n" + trimNotice + styledFollowLogs
 				m.viewport.SetContent(content)
 				m.viewport.GotoBottom()
+			}
+			cmds = append(cmds, m.continueFollow(m.selectedSvc, msg.id))
+		}
+
+	case followStartedMsg:
+		m.followPending = false
+		if msg.id != m.followSessionID {
+			// Stale session (selection changed while follow was starting); cancel stream.
+			msg.cancel()
+			break
+		}
+		m.following = true
+		m.followCancel = msg.cancel
+		m.followLogChan = msg.ch
+		m.followLogLines = nil
+		m.followTrimmed = false
+		m.selectedSvc = msg.unit
+		cmds = append(cmds, m.continueFollow(msg.unit, msg.id))
+
+	case followStoppedMsg:
+		if m.following && msg.id == m.followSessionID && msg.unit == m.selectedSvc {
+			m.stopFollow()
+			m.statusMessage = "Stopped following logs"
+			if m.selectedSvc != "" {
+				cmds = append(cmds, m.fetchDetailContent(m.selectedSvc))
 			}
 		}
 
 	case errMsg:
-		m.statusMessage = fmt.Sprintf("Error: %s - %s", msg.op, msg.err.Error())
+		m.followPending = false
+		m.statusMessage = fmt.Sprintf("Error: %s - %s", msg.op, renderUserError(msg.err))
 
 	case tickMsg:
-		// Don't refresh while filtering - it would reset the filter
-		if m.list.FilterState() == list.Filtering {
+		// Don't refresh while a filter is active or being entered — it would
+		// reset either the in-progress filter input or the applied filter result.
+		if m.list.FilterState() != list.Unfiltered {
 			return m, m.tick()
 		}
 		return m, tea.Batch(m.fetchServices, m.tick())
 	}
 
 	return m, tea.Batch(cmds...)
-}
-
-func (m MainModel) View() string {
-	var listStyle, detailStyle lipgloss.Style
-
-	if m.activeView == listView {
-		listStyle = m.activeBorder
-		detailStyle = m.inactiveBorder
-	} else {
-		listStyle = m.inactiveBorder
-		detailStyle = m.activeBorder
-	}
-
-	listView := listStyle.Render(m.list.View())
-	detailView := detailStyle.Render(m.viewport.View())
-
-	mainView := lipgloss.JoinHorizontal(
-		lipgloss.Top,
-		listView,
-		detailView,
-	)
-
-	fullWidth := m.width
-	if fullWidth < 1 {
-		fullWidth = lipgloss.Width(mainView)
-	}
-
-	statusBar := ""
-	if m.statusMessage != "" {
-		statusStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color(m.theme.TextMuted)).
-			PaddingLeft(1).
-			Width(fullWidth)
-		statusBar = statusStyle.Render(m.statusMessage)
-	}
-
-	filterBar := ""
-	if m.list.FilterState() == list.Filtering {
-		filterStyle := lipgloss.NewStyle().
-			PaddingLeft(1).
-			Width(fullWidth)
-		filterBar = filterStyle.Render(m.list.FilterInput.View())
-	}
-
-	helpView := renderHelpBar(keys, fullWidth, m.theme)
-
-	baseView := lipgloss.JoinVertical(
-		lipgloss.Left,
-		mainView,
-		filterBar,
-		statusBar,
-		helpView,
-	)
-
-	if m.showCreate {
-		return m.renderCreateModal(baseView)
-	}
-
-	return baseView
-}
-
-func (m MainModel) renderModalLabel(label string, index int) string {
-	if m.createModal.focusIndex == index {
-		return lipgloss.NewStyle().
-			Foreground(lipgloss.Color(m.theme.BorderActive)).
-			Bold(true).
-			Render(label)
-	}
-	return lipgloss.NewStyle().
-		Foreground(lipgloss.Color(m.theme.Text)).
-		Bold(true).
-		Render(label)
-}
-
-func (m MainModel) renderCreateModal(baseView string) string {
-	modalWidth := 60
-	modalHeight := 18
-
-	inputStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(m.theme.TextMuted))
-
-	var inputs []string
-
-	inputs = append(inputs, fmt.Sprintf("%s %s", m.renderModalLabel("Name:", 0), m.createModal.nameInput.View()))
-	inputs = append(inputs, fmt.Sprintf("%s %s", m.renderModalLabel("Command:", 1), m.createModal.execInput.View()))
-	inputs = append(inputs, fmt.Sprintf("%s %s", m.renderModalLabel("Description:", 2), m.createModal.descInput.View()))
-	inputs = append(inputs, fmt.Sprintf("%s %s", m.renderModalLabel("Workdir:", 3), m.createModal.workdirInput.View()))
-	inputs = append(inputs, fmt.Sprintf("%s %s", m.renderModalLabel("Type:", 4), inputStyle.Render(m.createModal.serviceType+" (t to toggle)")))
-	inputs = append(inputs, fmt.Sprintf("%s %s", m.renderModalLabel("Restart:", 5), inputStyle.Render(m.createModal.restart+" (r to cycle)")))
-
-	content := lipgloss.NewStyle().
-		Width(modalWidth).
-		Height(modalHeight).
-		Padding(1, 2).
-		Render(
-			lipgloss.JoinVertical(lipgloss.Left,
-				lipgloss.NewStyle().Bold(true).Render("Create New Service"),
-				"",
-				strings.Join(inputs, "\n"),
-				"",
-				inputStyle.Render("Tab: next • Shift+Tab: prev • Enter: create • Esc: cancel"),
-			),
-		)
-
-	modal := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color(m.theme.BorderActive)).
-		Background(lipgloss.Color(m.theme.Surface)).
-		Render(content)
-
-	return lipgloss.Place(
-		m.width, m.height,
-		lipgloss.Center, lipgloss.Center,
-		modal,
-		lipgloss.WithWhitespaceChars(" "),
-		lipgloss.WithWhitespaceBackground(lipgloss.Color(m.theme.Background)),
-	)
-}
-
-func (m MainModel) fetchServices() tea.Msg {
-	services, err := m.client.ListServices(m.ctx)
-	if err != nil {
-		return errMsg{op: "Failed to list services", err: err}
-	}
-	return services
-}
-
-type errMsg struct {
-	op  string
-	err error
-}
-
-func (e errMsg) Error() string { return e.err.Error() }
-
-type actionResultMsg struct {
-	message string
-	err     error
-}
-
-type editorFinishedMsg struct {
-	err error
-}
-
-type logMsg struct {
-	unit string
-	logs string
-	err  error
-}
-
-type logLineMsg struct {
-	line string
-}
-
-type tickMsg time.Time
-
-func (m MainModel) fetchLogs(unit string) tea.Cmd {
-	return func() tea.Msg {
-		lines := m.config.General.LogLines
-		if lines <= 0 {
-			lines = 50
-		}
-		logs, err := m.client.GetLogs(m.ctx, unit, client.LogOptions{Lines: lines})
-		return logMsg{unit: unit, logs: logs, err: err}
-	}
-}
-
-func (m MainModel) startService(unit string) tea.Cmd {
-	return func() tea.Msg {
-		err := m.client.StartService(m.ctx, unit)
-		return actionResultMsg{message: "Started " + unit, err: err}
-	}
-}
-
-func (m MainModel) stopService(unit string) tea.Cmd {
-	return func() tea.Msg {
-		err := m.client.StopService(m.ctx, unit)
-		return actionResultMsg{message: "Stopped " + unit, err: err}
-	}
-}
-
-func (m MainModel) restartService(unit string) tea.Cmd {
-	return func() tea.Msg {
-		err := m.client.RestartService(m.ctx, unit)
-		return actionResultMsg{message: "Restarted " + unit, err: err}
-	}
-}
-
-func (m MainModel) enableService(unit string) tea.Cmd {
-	return func() tea.Msg {
-		err := m.client.EnableService(m.ctx, unit)
-		return actionResultMsg{message: "Enabled " + unit, err: err}
-	}
-}
-
-func (m MainModel) disableService(unit string) tea.Cmd {
-	return func() tea.Msg {
-		err := m.client.DisableService(m.ctx, unit)
-		return actionResultMsg{message: "Disabled " + unit, err: err}
-	}
-}
-
-func (m MainModel) editService(unit string) tea.Cmd {
-	cmd, err := m.client.EditService(m.ctx, unit)
-	if err != nil {
-		return func() tea.Msg {
-			return editorFinishedMsg{err: err}
-		}
-	}
-	return tea.ExecProcess(
-		cmd,
-		func(err error) tea.Msg {
-			return editorFinishedMsg{err: err}
-		},
-	)
-}
-
-func (m *MainModel) startFollow(unit string) tea.Cmd {
-	logChan, cancel, err := m.client.FollowLogs(m.ctx, unit, client.LogOptions{Lines: 50})
-	if err != nil {
-		return func() tea.Msg {
-			return errMsg{op: "Failed to follow logs", err: err}
-		}
-	}
-
-	m.following = true
-	m.followCancel = cancel
-	m.followLogLines = nil
-
-	return func() tea.Msg {
-		for line := range logChan {
-			return logLineMsg{line: line}
-		}
-		return nil
-	}
-}
-
-func (m *MainModel) stopFollow() {
-	if m.followCancel != nil {
-		m.followCancel()
-	}
-	m.following = false
-	m.followCancel = nil
-	m.followLogLines = nil
 }
 
 func (m MainModel) buildListItems() []list.Item {
@@ -868,6 +848,17 @@ func (m MainModel) buildListItems() []list.Item {
 	}
 
 	return items
+}
+
+func (m *MainModel) updateListTitle() {
+	filtered := m.filteredServices()
+	filteredCount := len(filtered)
+	totalCount := len(m.services)
+	if filteredCount != totalCount {
+		m.list.Title = fmt.Sprintf("User Services (%d/%d)", filteredCount, totalCount)
+	} else {
+		m.list.Title = fmt.Sprintf("User Services (%d)", totalCount)
+	}
 }
 
 type groupHeaderItem struct {
@@ -1043,8 +1034,12 @@ func (m *MainModel) focusCreateInput() {
 }
 
 func (m MainModel) createServiceFromModal() (tea.Model, tea.Cmd) {
-	name := m.createModal.nameInput.Value()
-	exec := m.createModal.execInput.Value()
+	if m.creating {
+		return m, nil
+	}
+
+	name := strings.TrimSpace(m.createModal.nameInput.Value())
+	exec := strings.TrimSpace(m.createModal.execInput.Value())
 
 	if name == "" || exec == "" {
 		m.statusMessage = "Error: name and command are required"
@@ -1060,13 +1055,20 @@ func (m MainModel) createServiceFromModal() (tea.Model, tea.Cmd) {
 		Restart:          m.createModal.restart,
 	}
 
-	err := m.client.CreateService(m.ctx, tmpl)
-	if err != nil {
-		m.statusMessage = "Failed to create service: " + err.Error()
-		return m, nil
+	m.creating = true
+	m.statusMessage = fmt.Sprintf("Creating service: %s...", name)
+	return m, m.createService(tmpl)
+}
+
+func renderUserError(err error) string {
+	if err == nil {
+		return ""
 	}
 
-	m.showCreate = false
-	m.statusMessage = fmt.Sprintf("Created service: %s", name)
-	return m, m.fetchServices
+	var svcErr *client.ServiceError
+	if errors.As(err, &svcErr) {
+		return client.UserErrorMessage(svcErr)
+	}
+
+	return err.Error()
 }
