@@ -69,7 +69,7 @@ func (k keyMap) FullHelp() [][]key.Binding {
 		{k.Start, k.Stop, k.Restart, k.Edit},
 		{k.Enable, k.Disable, k.ToggleFollow, k.ToggleGroup},
 		{k.Create, k.ToggleSource, k.ToggleDetail, k.Quit},
-		{k.Help},
+		{k.ShrinkPanel, k.GrowPanel, k.Help},
 	}
 }
 
@@ -287,6 +287,7 @@ type MainModel struct {
 	confirmingUnit   string
 
 	following      bool
+	followPending  bool
 	followCancel   context.CancelFunc
 	followLogChan  <-chan string
 	followLogLines []string
@@ -515,8 +516,9 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.following {
 				m.stopFollow()
 				m.statusMessage = "Stopped following logs"
-			} else {
+			} else if !m.followPending {
 				if svc := m.getSelectedService(); svc != nil {
+					m.followPending = true
 					cmd = m.startFollow(svc.Name)
 					m.statusMessage = "Following logs for " + svc.Name
 					return m, cmd
@@ -682,14 +684,18 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.statusMessage = "Edit failed: " + renderUserError(msg.err)
 		} else {
-			if err := m.client.ReloadDaemon(m.ctx); err != nil {
-				m.statusMessage = "Edit saved, but reload failed: " + err.Error()
-			} else {
-				m.statusMessage = "Edit saved. Reloaded daemon."
-				cmds = append(cmds, m.fetchServices)
-			}
+			m.statusMessage = "Edit saved. Reloading daemon..."
+			cmds = append(cmds, m.reloadDaemon())
 		}
 		return m, tea.Batch(cmds...)
+
+	case reloadDaemonResultMsg:
+		if msg.err != nil {
+			m.statusMessage = "Edit saved, but reload failed: " + msg.err.Error()
+		} else {
+			m.statusMessage = "Edit saved. Reloaded daemon."
+			cmds = append(cmds, m.fetchServices)
+		}
 
 	case logMsg:
 		if msg.unit == m.selectedSvc && !m.following && m.detailViewMode == detailViewLogs {
@@ -774,6 +780,7 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case followStartedMsg:
+		m.followPending = false
 		m.following = true
 		m.followCancel = msg.cancel
 		m.followLogChan = msg.ch
@@ -792,11 +799,13 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case errMsg:
+		m.followPending = false
 		m.statusMessage = fmt.Sprintf("Error: %s - %s", msg.op, renderUserError(msg.err))
 
 	case tickMsg:
-		// Don't refresh while filtering - it would reset the filter
-		if m.list.FilterState() == list.Filtering {
+		// Don't refresh while a filter is active or being entered — it would
+		// reset either the in-progress filter input or the applied filter result.
+		if m.list.FilterState() != list.Unfiltered {
 			return m, m.tick()
 		}
 		return m, tea.Batch(m.fetchServices, m.tick())

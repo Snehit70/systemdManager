@@ -33,6 +33,10 @@ type editorFinishedMsg struct {
 	err error
 }
 
+type reloadDaemonResultMsg struct {
+	err error
+}
+
 type logMsg struct {
 	unit string
 	logs string
@@ -176,6 +180,13 @@ func (m MainModel) createService(tmpl client.ServiceTemplate) tea.Cmd {
 	return func() tea.Msg {
 		err := m.client.CreateService(m.ctx, tmpl)
 		return createServiceResultMsg{name: tmpl.Name, err: err}
+	}
+}
+
+func (m MainModel) reloadDaemon() tea.Cmd {
+	return func() tea.Msg {
+		err := m.client.ReloadDaemon(m.ctx)
+		return reloadDaemonResultMsg{err: err}
 	}
 }
 
