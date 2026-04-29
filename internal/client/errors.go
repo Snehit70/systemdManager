@@ -89,13 +89,13 @@ func UserErrorMessage(err *ServiceError) string {
 
 	switch {
 	case errors.Is(err.Kind, ErrNotFound):
-		return fmt.Sprintf("Service '%s' not found", err.Unit)
+		return fmt.Sprintf("%s for unit '%s' failed: service not found", err.Op, err.Unit)
 	case errors.Is(err.Kind, ErrPermissionDenied):
 		return fmt.Sprintf("%s for unit '%s' failed: permission denied - check your user session and ACLs", err.Op, err.Unit)
 	case errors.Is(err.Kind, ErrNotRunning):
-		return fmt.Sprintf("Service '%s' is not running", err.Unit)
+		return fmt.Sprintf("%s for unit '%s' failed: service is not running", err.Op, err.Unit)
 	case errors.Is(err.Kind, ErrNotEnabled):
-		return fmt.Sprintf("Service '%s' is not enabled", err.Unit)
+		return fmt.Sprintf("%s for unit '%s' failed: service is not enabled", err.Op, err.Unit)
 	default:
 		return err.Error()
 	}

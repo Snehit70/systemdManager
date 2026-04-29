@@ -43,6 +43,7 @@ type detailContentMsg struct {
 	unit    string
 	mode    detailViewMode
 	content string
+	err     error
 }
 
 type logLineMsg struct {
@@ -55,7 +56,9 @@ type followStartedMsg struct {
 	cancel context.CancelFunc
 }
 
-type followStoppedMsg struct{}
+type followStoppedMsg struct {
+	unit string
+}
 
 type tickMsg time.Time
 
@@ -99,23 +102,15 @@ func (m MainModel) fetchDetailContent(unit string) tea.Cmd {
 		switch mode {
 		case detailViewStatus:
 			content, err = m.client.GetStatusDetails(m.ctx, unit)
-			if err != nil {
-				content = "Error fetching status: " + err.Error()
-			}
 		case detailViewConfig:
 			content, err = m.client.GetConfig(m.ctx, unit)
-			if err != nil {
-				content = "Error fetching config: " + err.Error()
-			}
 		default:
 			lines := m.config.General.LogLines
 			if lines <= 0 {
 				lines = 50
 			}
 			content, err = m.client.GetLogs(m.ctx, unit, client.LogOptions{Lines: lines})
-			if err != nil {
-				content = "Error fetching logs: " + err.Error()
-			} else {
+			if err == nil {
 				svc := m.selectedServiceByName(unit)
 				if svc != nil {
 					header := renderDetailHeader(m.theme,
@@ -127,7 +122,7 @@ func (m MainModel) fetchDetailContent(unit string) tea.Cmd {
 				}
 			}
 		}
-		return detailContentMsg{unit: unit, mode: mode, content: content}
+		return detailContentMsg{unit: unit, mode: mode, content: content, err: err}
 	}
 }
 
@@ -240,11 +235,11 @@ func (m MainModel) continueFollow(unit string) tea.Cmd {
 		select {
 		case line, ok := <-ch:
 			if !ok {
-				return followStoppedMsg{}
+				return followStoppedMsg{unit: unit}
 			}
 			return logLineMsg{line: line}
 		case <-ctx.Done():
-			return followStoppedMsg{}
+			return followStoppedMsg{unit: unit}
 		}
 	}
 }

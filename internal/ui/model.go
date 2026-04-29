@@ -721,6 +721,10 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.following && m.detailViewMode == detailViewLogs {
 				break
 			}
+			if msg.err != nil {
+				m.statusMessage = fmt.Sprintf("Failed to load %s for %s: %s", msg.mode, msg.unit, renderUserError(msg.err))
+				break
+			}
 			m.viewport.SetContent(m.viewportWithScrollInfo(msg.content))
 		}
 
@@ -779,7 +783,7 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.continueFollow(msg.unit))
 
 	case followStoppedMsg:
-		if m.following {
+		if m.following && msg.unit == m.selectedSvc {
 			m.stopFollow()
 			m.statusMessage = "Stopped following logs"
 			if m.selectedSvc != "" {
