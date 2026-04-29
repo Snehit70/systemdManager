@@ -12,9 +12,14 @@ type ServiceError struct {
 	Unit string
 	Code int
 	Err  error
+	Kind error
 }
 
 func (e *ServiceError) Error() string {
+	if e == nil {
+		return "unknown service error"
+	}
+
 	parts := []string{e.Op}
 	if e.Unit != "" {
 		parts = append(parts, e.Unit)
@@ -29,11 +34,19 @@ func (e *ServiceError) Error() string {
 }
 
 func (e *ServiceError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+
 	return e.Err
 }
 
 func (e *ServiceError) Is(target error) bool {
-	return errors.Is(e.Err, target)
+	if e == nil {
+		return false
+	}
+
+	return errors.Is(e.Err, target) || errors.Is(e.Kind, target)
 }
 
 var (
@@ -60,10 +73,10 @@ func NewServiceError(op, unit string, cmdErr error) *ServiceError {
 
 	msg := strings.ToLower(cmdErr.Error())
 	if strings.Contains(msg, "not found") || strings.Contains(msg, "could not be found") {
-		err.Err = errors.Join(err.Err, ErrNotFound)
+		err.Kind = errors.Join(err.Kind, ErrNotFound)
 	}
 	if strings.Contains(msg, "permission denied") || strings.Contains(msg, "access denied") {
-		err.Err = errors.Join(err.Err, ErrPermissionDenied)
+		err.Kind = errors.Join(err.Kind, ErrPermissionDenied)
 	}
 
 	return err
@@ -75,13 +88,13 @@ func UserErrorMessage(err *ServiceError) string {
 	}
 
 	switch {
-	case errors.Is(err.Err, ErrNotFound):
+	case errors.Is(err.Kind, ErrNotFound):
 		return fmt.Sprintf("Service '%s' not found", err.Unit)
-	case errors.Is(err.Err, ErrPermissionDenied):
-		return "Permission denied. Try running with --user flag or check permissions."
-	case errors.Is(err.Err, ErrNotRunning):
+	case errors.Is(err.Kind, ErrPermissionDenied):
+		return fmt.Sprintf("%s for unit '%s' failed: permission denied - check your user session and ACLs", err.Op, err.Unit)
+	case errors.Is(err.Kind, ErrNotRunning):
 		return fmt.Sprintf("Service '%s' is not running", err.Unit)
-	case errors.Is(err.Err, ErrNotEnabled):
+	case errors.Is(err.Kind, ErrNotEnabled):
 		return fmt.Sprintf("Service '%s' is not enabled", err.Unit)
 	default:
 		return err.Error()

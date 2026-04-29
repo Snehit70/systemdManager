@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -502,6 +503,9 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case key.Matches(msg, keys.ToggleDetail):
 			m.detailViewMode = m.detailViewMode.Next()
+			if m.following && m.detailViewMode != detailViewLogs {
+				m.stopFollow()
+			}
 			m.statusMessage = fmt.Sprintf("Detail view: %s", m.detailViewMode)
 			if svc := m.getSelectedService(); svc != nil {
 				cmds = append(cmds, m.fetchDetailContent(svc.Name))
@@ -658,7 +662,7 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case actionResultMsg:
 		m.statusMessage = msg.message
 		if msg.err != nil {
-			m.statusMessage = "Error: " + msg.err.Error()
+			m.statusMessage = "Error: " + renderUserError(msg.err)
 		} else {
 			cmds = append(cmds, m.fetchServices)
 		}
@@ -666,7 +670,7 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case createServiceResultMsg:
 		m.creating = false
 		if msg.err != nil {
-			m.statusMessage = "Failed to create service: " + msg.err.Error()
+			m.statusMessage = "Failed to create service: " + renderUserError(msg.err)
 			m.showCreate = true
 		} else {
 			m.showCreate = false
@@ -676,7 +680,7 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case editorFinishedMsg:
 		if msg.err != nil {
-			m.statusMessage = "Edit failed: " + msg.err.Error()
+			m.statusMessage = "Edit failed: " + renderUserError(msg.err)
 		} else {
 			if err := m.client.ReloadDaemon(m.ctx); err != nil {
 				m.statusMessage = "Edit saved, but reload failed: " + err.Error()
@@ -700,7 +704,7 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					banner = "Log error"
 					body = lipgloss.NewStyle().
 						Foreground(lipgloss.Color(m.theme.StatusFailed)).
-						Render(msg.err.Error())
+						Render(renderUserError(msg.err))
 				} else {
 					body = styleLogContent(msg.logs, m.theme)
 				}
@@ -713,12 +717,12 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case detailContentMsg:
-		if msg.unit == m.selectedSvc {
+		if msg.unit == m.selectedSvc && msg.mode == m.detailViewMode {
 			m.viewport.SetContent(m.viewportWithScrollInfo(msg.content))
 		}
 
 	case logLineMsg:
-		if m.following && m.selectedSvc != "" {
+		if m.following && m.selectedSvc != "" && m.detailViewMode == detailViewLogs {
 			line := msg.line
 			maxLineBytes := 64 * 1024
 			if len(line) > maxLineBytes {
@@ -770,10 +774,13 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.following {
 			m.stopFollow()
 			m.statusMessage = "Stopped following logs"
+			if m.selectedSvc != "" {
+				cmds = append(cmds, m.fetchDetailContent(m.selectedSvc))
+			}
 		}
 
 	case errMsg:
-		m.statusMessage = fmt.Sprintf("Error: %s - %s", msg.op, msg.err.Error())
+		m.statusMessage = fmt.Sprintf("Error: %s - %s", msg.op, renderUserError(msg.err))
 
 	case tickMsg:
 		// Don't refresh while filtering - it would reset the filter
@@ -1011,4 +1018,17 @@ func (m MainModel) createServiceFromModal() (tea.Model, tea.Cmd) {
 	m.creating = true
 	m.statusMessage = fmt.Sprintf("Creating service: %s...", name)
 	return m, m.createService(tmpl)
+}
+
+func renderUserError(err error) string {
+	if err == nil {
+		return ""
+	}
+
+	var svcErr *client.ServiceError
+	if errors.As(err, &svcErr) {
+		return client.UserErrorMessage(svcErr)
+	}
+
+	return err.Error()
 }

@@ -41,6 +41,7 @@ type logMsg struct {
 
 type detailContentMsg struct {
 	unit    string
+	mode    detailViewMode
 	content string
 }
 
@@ -91,10 +92,11 @@ func (m MainModel) fetchLogs(unit string) tea.Cmd {
 
 func (m MainModel) fetchDetailContent(unit string) tea.Cmd {
 	return func() tea.Msg {
+		mode := m.detailViewMode
 		var content string
 		var err error
 
-		switch m.detailViewMode {
+		switch mode {
 		case detailViewStatus:
 			content, err = m.client.GetStatusDetails(m.ctx, unit)
 			if err != nil {
@@ -125,7 +127,7 @@ func (m MainModel) fetchDetailContent(unit string) tea.Cmd {
 				}
 			}
 		}
-		return detailContentMsg{unit: unit, content: content}
+		return detailContentMsg{unit: unit, mode: mode, content: content}
 	}
 }
 
