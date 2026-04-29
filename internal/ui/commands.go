@@ -51,16 +51,19 @@ type detailContentMsg struct {
 }
 
 type logLineMsg struct {
+	id   uint64
 	line string
 }
 
 type followStartedMsg struct {
+	id     uint64
 	unit   string
 	ch     <-chan string
 	cancel context.CancelFunc
 }
 
 type followStoppedMsg struct {
+	id   uint64
 	unit string
 }
 
@@ -84,17 +87,6 @@ func (m MainModel) fetchServices() tea.Msg {
 		return errMsg{op: "Failed to list services", err: err}
 	}
 	return services
-}
-
-func (m MainModel) fetchLogs(unit string) tea.Cmd {
-	return func() tea.Msg {
-		lines := m.config.General.LogLines
-		if lines <= 0 {
-			lines = 50
-		}
-		logs, err := m.client.GetLogs(m.ctx, unit, client.LogOptions{Lines: lines})
-		return logMsg{unit: unit, logs: logs, err: err}
-	}
 }
 
 func (m MainModel) fetchDetailContent(unit string) tea.Cmd {
@@ -207,7 +199,7 @@ func (m MainModel) editService(unit string) tea.Cmd {
 
 // Follow mode lifecycle.
 
-func (m MainModel) startFollow(unit string) tea.Cmd {
+func (m MainModel) startFollow(unit string, id uint64) tea.Cmd {
 	return func() tea.Msg {
 		lines := m.config.General.LogLines
 		if lines <= 0 {
@@ -219,7 +211,7 @@ func (m MainModel) startFollow(unit string) tea.Cmd {
 			return errMsg{op: "Failed to follow logs", err: err}
 		}
 
-		return followStartedMsg{unit: unit, ch: logChan, cancel: cancel}
+		return followStartedMsg{id: id, unit: unit, ch: logChan, cancel: cancel}
 	}
 }
 
@@ -234,7 +226,7 @@ func (m *MainModel) stopFollow() {
 	m.followTrimmed = false
 }
 
-func (m MainModel) continueFollow(unit string) tea.Cmd {
+func (m MainModel) continueFollow(unit string, id uint64) tea.Cmd {
 	if !m.following || m.followLogChan == nil {
 		return nil
 	}
@@ -246,11 +238,11 @@ func (m MainModel) continueFollow(unit string) tea.Cmd {
 		select {
 		case line, ok := <-ch:
 			if !ok {
-				return followStoppedMsg{unit: unit}
+				return followStoppedMsg{id: id, unit: unit}
 			}
-			return logLineMsg{line: line}
+			return logLineMsg{id: id, line: line}
 		case <-ctx.Done():
-			return followStoppedMsg{unit: unit}
+			return followStoppedMsg{id: id, unit: unit}
 		}
 	}
 }

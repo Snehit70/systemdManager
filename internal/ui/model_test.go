@@ -264,7 +264,7 @@ func TestStartFollowUsesConfiguredLogLines(t *testing.T) {
 	cfg.General.LogLines = 123
 	model := NewMainModel(mockClient, cfg)
 
-	cmd := model.startFollow("demo.service")
+	cmd := model.startFollow("demo.service", 1)
 
 	if cmd == nil {
 		t.Fatal("expected follow command")

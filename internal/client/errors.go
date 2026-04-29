@@ -54,6 +54,7 @@ var (
 	ErrPermissionDenied = errors.New("permission denied")
 	ErrNotRunning       = errors.New("service not running")
 	ErrNotEnabled       = errors.New("service not enabled")
+	ErrSystemctlMissing = errors.New("systemctl not found")
 )
 
 func NewServiceError(op, unit string, cmdErr error) *ServiceError {
@@ -72,7 +73,12 @@ func NewServiceError(op, unit string, cmdErr error) *ServiceError {
 	}
 
 	msg := strings.ToLower(cmdErr.Error())
-	if strings.Contains(msg, "not found") || strings.Contains(msg, "could not be found") {
+	// Check for missing systemctl binary before generic "not found" patterns.
+	if (strings.Contains(msg, "executable file not found") || strings.Contains(msg, "no such file or directory")) &&
+		strings.Contains(msg, "systemctl") {
+		err.Kind = errors.Join(err.Kind, ErrSystemctlMissing)
+	} else if strings.Contains(msg, "service not found") || strings.Contains(msg, "could not be found") ||
+		(strings.Contains(msg, "not found") && !strings.Contains(msg, "systemctl")) {
 		err.Kind = errors.Join(err.Kind, ErrNotFound)
 	}
 	if strings.Contains(msg, "permission denied") || strings.Contains(msg, "access denied") {
@@ -88,6 +94,8 @@ func UserErrorMessage(err *ServiceError) string {
 	}
 
 	switch {
+	case errors.Is(err.Kind, ErrSystemctlMissing):
+		return "systemctl not found in PATH — is systemd installed and available?"
 	case errors.Is(err.Kind, ErrNotFound):
 		return fmt.Sprintf("%s for unit '%s' failed: service not found", err.Op, err.Unit)
 	case errors.Is(err.Kind, ErrPermissionDenied):

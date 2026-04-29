@@ -286,12 +286,13 @@ type MainModel struct {
 	confirmingAction string
 	confirmingUnit   string
 
-	following      bool
-	followPending  bool
-	followCancel   context.CancelFunc
-	followLogChan  <-chan string
-	followLogLines []string
-	followTrimmed  bool
+	following       bool
+	followPending   bool
+	followSessionID uint64
+	followCancel    context.CancelFunc
+	followLogChan   <-chan string
+	followLogLines  []string
+	followTrimmed   bool
 
 	groupMode      groupMode
 	filterMode     filterMode
@@ -436,6 +437,9 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if m.following {
 						m.stopFollow()
 						m.statusMessage = "Stopped following (service changed)"
+					} else if m.followPending {
+						m.followSessionID++ // invalidate in-flight startFollow
+						m.followPending = false
 					}
 					m.selectedSvc = svc.Name
 					cmds = append(cmds, m.fetchDetailContent(svc.Name))
@@ -518,8 +522,10 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.statusMessage = "Stopped following logs"
 			} else if !m.followPending {
 				if svc := m.getSelectedService(); svc != nil {
+					m.detailViewMode = detailViewLogs
+					m.followSessionID++
 					m.followPending = true
-					cmd = m.startFollow(svc.Name)
+					cmd = m.startFollow(svc.Name, m.followSessionID)
 					m.statusMessage = "Following logs for " + svc.Name
 					return m, cmd
 				}
@@ -613,6 +619,9 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						if m.following {
 							m.stopFollow()
 							m.statusMessage = "Stopped following (service changed)"
+						} else if m.followPending {
+							m.followSessionID++ // invalidate in-flight startFollow
+							m.followPending = false
 						}
 						m.selectedSvc = svc.Name
 						cmds = append(cmds, m.fetchDetailContent(svc.Name))
@@ -735,7 +744,7 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case logLineMsg:
-		if m.following && m.selectedSvc != "" {
+		if m.following && msg.id == m.followSessionID && m.selectedSvc != "" {
 			line := msg.line
 			maxLineBytes := 64 * 1024
 			if len(line) > maxLineBytes {
@@ -755,7 +764,7 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.detailViewMode == detailViewLogs {
 				svc := m.getSelectedService()
 				if svc == nil {
-					cmds = append(cmds, m.continueFollow(m.selectedSvc))
+					cmds = append(cmds, m.continueFollow(m.selectedSvc, msg.id))
 					break
 				}
 				trimNotice := ""
@@ -776,21 +785,26 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.viewport.SetContent(content)
 				m.viewport.GotoBottom()
 			}
-			cmds = append(cmds, m.continueFollow(m.selectedSvc))
+			cmds = append(cmds, m.continueFollow(m.selectedSvc, msg.id))
 		}
 
 	case followStartedMsg:
 		m.followPending = false
+		if msg.id != m.followSessionID {
+			// Stale session (selection changed while follow was starting); cancel stream.
+			msg.cancel()
+			break
+		}
 		m.following = true
 		m.followCancel = msg.cancel
 		m.followLogChan = msg.ch
 		m.followLogLines = nil
 		m.followTrimmed = false
 		m.selectedSvc = msg.unit
-		cmds = append(cmds, m.continueFollow(msg.unit))
+		cmds = append(cmds, m.continueFollow(msg.unit, msg.id))
 
 	case followStoppedMsg:
-		if m.following && msg.unit == m.selectedSvc {
+		if m.following && msg.id == m.followSessionID && msg.unit == m.selectedSvc {
 			m.stopFollow()
 			m.statusMessage = "Stopped following logs"
 			if m.selectedSvc != "" {
