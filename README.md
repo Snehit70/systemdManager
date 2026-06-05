@@ -5,6 +5,8 @@ A terminal UI for managing `systemd --user` services. Split-pane layout, vim-sty
 ![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go)
 ![License](https://img.shields.io/badge/License-MIT-green.svg)
 
+![Systemd TUI Manager showing user services and logs](./docs/assets/systemd-manager-tui-2026-06-05.png)
+
 ## Features
 
 - Start, stop, restart, enable, disable user services
