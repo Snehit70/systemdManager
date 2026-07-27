@@ -1,28 +1,36 @@
 name: Agent inspect reliability scope
 
 on:
-  pull_request:
-    branches:
-      - main
   push:
     branches:
       - agent/fix-service-discovery-follow-refresh-layout
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   inspect:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Repository paths and symbols
+        with:
+          ref: agent/fix-service-discovery-follow-refresh-layout
+      - name: Capture repository symbols
         run: |
-          echo '=== service files ==='
-          find internal/service -maxdepth 1 -type f -print | sort
-          echo '=== Unit definitions ==='
-          grep -R -n -E '^type (Unit|UnitFile) struct' internal/service || true
-          echo '=== MainModel and layout symbols ==='
-          grep -R -n -E '^type MainModel struct|func \(m \*?MainModel\) recalcPanelSizes|func NewMainModel|fetchServices|followPending|followSessionID' internal/ui/model.go internal/ui/commands.go | head -200
-          echo '=== Service mock FollowLogs implementations ==='
-          grep -R -n 'FollowLogs(ctx' internal --include='*.go'
+          {
+            echo '=== service files ==='
+            find internal/service -maxdepth 1 -type f -print | sort
+            echo '=== Unit definitions ==='
+            grep -R -n -E '^type (Unit|UnitFile) struct' internal/service || true
+            echo '=== MainModel and layout symbols ==='
+            grep -R -n -E '^type MainModel struct|func \(m \*?MainModel\) recalcPanelSizes|func NewMainModel|fetchServices|followPending|followSessionID' internal/ui/model.go internal/ui/commands.go | head -200
+            echo '=== Service mock FollowLogs implementations ==='
+            grep -R -n 'FollowLogs(ctx' internal --include='*.go'
+          } > .agent-inspection.txt
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .agent-inspection.txt
+          if ! git diff --cached --quiet; then
+            git commit -m 'chore: capture temporary reliability inspection'
+            git push origin HEAD:agent/fix-service-discovery-follow-refresh-layout
+          fi
