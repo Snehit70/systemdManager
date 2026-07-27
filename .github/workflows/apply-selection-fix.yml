@@ -1,16 +1,19 @@
 name: Apply and verify selection fix
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/preserve-service-selection
+      - main
 
 permissions:
   contents: write
 
+concurrency:
+  group: selection-fix-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   apply-and-verify:
-    if: github.event.head_commit.message == 'chore: run selection fix'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,8 +25,14 @@ jobs:
           cache: true
       - name: Apply patch
         run: |
-          git apply --check .github/selection-fix.patch
-          git apply .github/selection-fix.patch
+          if git apply --check .github/selection-fix.patch; then
+            git apply .github/selection-fix.patch
+          elif git apply --reverse --check .github/selection-fix.patch; then
+            echo 'Patch is already applied'
+          else
+            echo 'Patch cannot be applied cleanly'
+            exit 1
+          fi
       - name: Format
         run: gofmt -w internal/ui/model.go internal/ui/model_test.go
       - name: Vet
@@ -35,5 +44,9 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add internal/ui/model.go internal/ui/model_test.go
+          if git diff --cached --quiet; then
+            echo 'Verified code is already committed'
+            exit 0
+          fi
           git commit -m 'fix: preserve selected service across list rebuilds'
           git push origin HEAD:agent/preserve-service-selection
