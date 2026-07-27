@@ -36,7 +36,8 @@ jobs:
             internal/ui/commands.go \
             internal/ui/model.go \
             internal/ui/model_test.go \
-            internal/ui/reliability_test.go
+            internal/ui/reliability_test.go \
+            internal/ui/view.go
       - name: Vet complete module
         shell: bash
         run: |
@@ -78,7 +79,8 @@ jobs:
             internal/ui/commands.go \
             internal/ui/model.go \
             internal/ui/model_test.go \
-            internal/ui/reliability_test.go
+            internal/ui/reliability_test.go \
+            internal/ui/view.go
           if ! git diff --cached --quiet; then
             git commit -m 'fix: harden service discovery and async reliability'
             git push origin HEAD:agent/fix-service-discovery-follow-refresh-layout
