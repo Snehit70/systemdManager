@@ -1,6 +1,9 @@
 name: Agent inspect reliability scope
 
 on:
+  pull_request:
+    branches:
+      - main
   push:
     branches:
       - agent/fix-service-discovery-follow-refresh-layout
