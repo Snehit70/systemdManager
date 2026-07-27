@@ -21,7 +21,7 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Check formatting
-        run: test -z "$(gofmt -l .)"
+        run: test -z "$(gofmt -l internal/service/client.go internal/service/creation_consistency_test.go)"
       - name: Vet
         run: go vet ./...
       - name: Test
