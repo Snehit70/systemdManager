@@ -84,6 +84,12 @@ func NewServiceError(op, unit string, cmdErr error) *ServiceError {
 	if strings.Contains(msg, "permission denied") || strings.Contains(msg, "access denied") {
 		err.Kind = errors.Join(err.Kind, ErrPermissionDenied)
 	}
+	if strings.Contains(msg, "not running") || strings.Contains(msg, "is not active") {
+		err.Kind = errors.Join(err.Kind, ErrNotRunning)
+	}
+	if strings.Contains(msg, "not enabled") {
+		err.Kind = errors.Join(err.Kind, ErrNotEnabled)
+	}
 
 	return err
 }
