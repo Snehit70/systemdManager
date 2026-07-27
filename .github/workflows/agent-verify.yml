@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - agent/fix-service-creation-consistency
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: read
