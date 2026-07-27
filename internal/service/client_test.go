@@ -274,11 +274,11 @@ func (m *mockSystemdClient) ReloadDaemon(ctx context.Context) error {
 	return nil
 }
 
-func (m *mockSystemdClient) FollowLogs(ctx context.Context, name string, opts client.LogOptions) (<-chan string, context.CancelFunc, error) {
+func (m *mockSystemdClient) FollowLogs(ctx context.Context, name string, opts client.LogOptions) (<-chan client.LogEvent, context.CancelFunc, error) {
 	if name == "error.service" {
 		return nil, nil, errors.New("failed to follow logs")
 	}
-	ch := make(chan string)
+	ch := make(chan client.LogEvent)
 	cancel := func() { close(ch) }
 	return ch, cancel, nil
 }

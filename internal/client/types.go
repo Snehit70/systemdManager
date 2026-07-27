@@ -52,6 +52,12 @@ type LogOptions struct {
 	Filter string // Optional log level or text filter
 }
 
+// LogEvent carries either one live log line or a terminal stream error.
+type LogEvent struct {
+	Line string
+	Err  error
+}
+
 // ServiceTemplate defines parameters for creating a new service.
 type ServiceTemplate struct {
 	Name             string
@@ -81,9 +87,9 @@ type ServiceClient interface {
 	GetConfig(ctx context.Context, name string) (string, error)
 	GetStatusDetails(ctx context.Context, name string) (string, error)
 
-	// FollowLogs returns a channel that emits log lines.
-	// Call the returned cancel function to stop the stream.
-	FollowLogs(ctx context.Context, name string, opts LogOptions) (<-chan string, context.CancelFunc, error)
+	// FollowLogs returns a channel that emits log lines and terminal stream errors.
+	// Call the returned cancel function to stop the stream; cancellation is not emitted as an error.
+	FollowLogs(ctx context.Context, name string, opts LogOptions) (<-chan LogEvent, context.CancelFunc, error)
 
 	// Service file management
 	EditService(ctx context.Context, name string) (*exec.Cmd, error)

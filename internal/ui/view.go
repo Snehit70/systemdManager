@@ -48,16 +48,7 @@ func (m MainModel) View() string {
 		filterBar = m.renderFilterBar(fullWidth)
 	}
 
-	var helpView string
-	if m.help.ShowAll {
-		helpView = lipgloss.NewStyle().
-			Width(fullWidth).
-			PaddingLeft(1).
-			Background(lipgloss.Color(m.theme.SurfaceDeep)).
-			Render(m.help.View(keys))
-	} else {
-		helpView = renderHelpBar(keys, fullWidth, m.theme)
-	}
+	helpView := m.renderHelpView(fullWidth)
 
 	baseView := lipgloss.JoinVertical(
 		lipgloss.Left,
@@ -397,6 +388,17 @@ func (m *MainModel) viewportWithScrollInfo(content string) string {
 }
 
 // --- Status, filter and help bars -----------------------------------------
+
+func (m MainModel) renderHelpView(width int) string {
+	if m.help.ShowAll {
+		return lipgloss.NewStyle().
+			Width(width).
+			PaddingLeft(1).
+			Background(lipgloss.Color(m.theme.SurfaceDeep)).
+			Render(m.help.View(keys))
+	}
+	return renderHelpBar(keys, width, m.theme)
+}
 
 func (m MainModel) renderStatusBar(width int) string {
 	bg := m.theme.Surface
