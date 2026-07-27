@@ -25,6 +25,7 @@ jobs:
           cache: true
       - name: Apply patch
         run: |
+          sed -i 's/^ diff --git/diff --git/' .github/selection-fix.patch
           if git apply --check .github/selection-fix.patch; then
             git apply .github/selection-fix.patch
           elif git apply --reverse --check .github/selection-fix.patch; then
