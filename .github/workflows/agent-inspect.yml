@@ -23,7 +23,9 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Apply deterministic source transformation
-        run: python3 .github/agent_apply_reliability.py
+        run: |
+          python3 .github/agent_apply_reliability.py
+          python3 .github/agent_fix_reliability_followup.py
       - name: Format changed Go files
         run: |
           gofmt -w \
@@ -41,11 +43,20 @@ jobs:
           set -o pipefail
           go vet ./... 2>&1 | tee .agent-verification.txt
       - name: Run complete test suite
-        run: go test ./... -count=1
+        shell: bash
+        run: |
+          set -o pipefail
+          go test ./... -count=1 2>&1 | tee .agent-verification.txt
       - name: Stress reliability packages
-        run: go test ./internal/service ./internal/ui -count=20
+        shell: bash
+        run: |
+          set -o pipefail
+          go test ./internal/service ./internal/ui -count=20 2>&1 | tee .agent-verification.txt
       - name: Run race detector
-        run: go test -race ./... -count=1
+        shell: bash
+        run: |
+          set -o pipefail
+          go test -race ./... -count=1 2>&1 | tee .agent-verification.txt
       - name: Commit verification diagnostics
         if: failure() && github.event_name == 'push'
         run: |
