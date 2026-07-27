@@ -24,7 +24,9 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Apply deterministic transformation
-        run: python3 .github/apply_selection_fix.py
+        run: |
+          python3 .github/apply_selection_fix.py
+          python3 .github/apply_selection_followup.py
       - name: Format
         run: gofmt -w internal/ui/model.go internal/ui/model_test.go
       - name: Vet
