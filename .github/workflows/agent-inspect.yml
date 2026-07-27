@@ -1,6 +1,9 @@
-name: Agent inspect reliability scope
+name: Agent verify reliability fixes
 
 on:
+  pull_request:
+    branches:
+      - main
   push:
     branches:
       - agent/fix-service-discovery-follow-refresh-layout
@@ -9,28 +12,52 @@ permissions:
   contents: write
 
 jobs:
-  inspect:
+  verify:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: agent/fix-service-discovery-follow-refresh-layout
-      - name: Capture repository symbols
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Apply deterministic source transformation
+        run: python3 .github/agent_apply_reliability.py
+      - name: Format changed Go files
         run: |
-          {
-            echo '=== service files ==='
-            find internal/service -maxdepth 1 -type f -print | sort
-            echo '=== Unit definitions ==='
-            grep -R -n -E '^type (Unit|UnitFile) struct' internal/service || true
-            echo '=== MainModel and layout symbols ==='
-            grep -R -n -E '^type MainModel struct|func \(m \*?MainModel\) recalcPanelSizes|func NewMainModel|fetchServices|followPending|followSessionID' internal/ui/model.go internal/ui/commands.go | head -200
-            echo '=== Service mock FollowLogs implementations ==='
-            grep -R -n 'FollowLogs(ctx' internal --include='*.go'
-          } > .agent-inspection.txt
+          gofmt -w \
+            internal/client/types.go \
+            internal/service/client.go \
+            internal/service/client_test.go \
+            internal/service/reliability_test.go \
+            internal/ui/commands.go \
+            internal/ui/model.go \
+            internal/ui/model_test.go \
+            internal/ui/reliability_test.go
+      - name: Vet complete module
+        run: go vet ./...
+      - name: Run complete test suite
+        run: go test ./... -count=1
+      - name: Stress reliability packages
+        run: go test ./internal/service ./internal/ui -count=20
+      - name: Run race detector
+        run: go test -race ./... -count=1
+      - name: Commit verified implementation
+        if: github.event_name == 'push'
+        run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add .agent-inspection.txt
+          git add \
+            internal/client/types.go \
+            internal/service/client.go \
+            internal/service/client_test.go \
+            internal/service/reliability_test.go \
+            internal/ui/commands.go \
+            internal/ui/model.go \
+            internal/ui/model_test.go \
+            internal/ui/reliability_test.go
           if ! git diff --cached --quiet; then
-            git commit -m 'chore: capture temporary reliability inspection'
+            git commit -m 'fix: harden service discovery and async reliability'
             git push origin HEAD:agent/fix-service-discovery-follow-refresh-layout
           fi
