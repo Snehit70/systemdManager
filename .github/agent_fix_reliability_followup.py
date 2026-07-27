@@ -38,9 +38,10 @@ new = '''\tm.help.Width = m.width
 \t\thelpHeight = 1
 \t}
 '''
-if old not in text:
+if old in text:
+    path.write_text(text.replace(old, new, 1))
+elif new not in text:
     raise RuntimeError("rendered help height block not found")
-path.write_text(text.replace(old, new, 1))
 
 path = Path("internal/ui/view.go")
 text = path.read_text()
@@ -57,9 +58,10 @@ old = '''\tvar helpView string
 '''
 new = '''\thelpView := m.renderHelpView(fullWidth)
 '''
-if old not in text:
+if old in text:
+    text = text.replace(old, new, 1)
+elif new not in text:
     raise RuntimeError("View help block not found")
-text = text.replace(old, new, 1)
 marker = '''func (m MainModel) renderStatusBar(width int) string {
 '''
 helper = '''func (m MainModel) renderHelpView(width int) string {
@@ -74,9 +76,11 @@ helper = '''func (m MainModel) renderHelpView(width int) string {
 }
 
 '''
-if marker not in text:
-    raise RuntimeError("renderStatusBar marker not found")
-path.write_text(text.replace(marker, helper + marker, 1))
+if helper not in text:
+    if marker not in text:
+        raise RuntimeError("renderStatusBar marker not found")
+    text = text.replace(marker, helper + marker, 1)
+path.write_text(text)
 
 path = Path("internal/ui/reliability_test.go")
 text = path.read_text()
