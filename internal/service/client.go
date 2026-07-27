@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -249,7 +251,7 @@ func (c *systemdClient) unitToService(u Unit, state string) client.Service {
 
 func isUnitFileEnabled(state string) bool {
 	switch state {
-	case "enabled", "enabled-runtime", "static", "indirect", "generated":
+	case "enabled", "enabled-runtime":
 		return true
 	default:
 		return false
@@ -300,21 +302,64 @@ func (c *systemdClient) CreateService(ctx context.Context, tmpl client.ServiceTe
 	}
 
 	content := c.generateServiceFile(tmpl)
-
-	file, err := os.OpenFile(servicePath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
-	if err != nil {
-		if os.IsExist(err) {
+	if err := writeServiceFile(servicePath, content); err != nil {
+		if errors.Is(err, fs.ErrExist) {
 			return fmt.Errorf("service %s already exists", tmpl.Name)
 		}
 		return fmt.Errorf("failed to create service file: %w", err)
 	}
-	defer file.Close()
 
-	if _, err := file.WriteString(content); err != nil {
-		return fmt.Errorf("failed to write service file: %w", err)
+	if err := c.ReloadDaemon(ctx); err != nil {
+		primaryErr := fmt.Errorf("failed to reload daemon after creating %s: %w", tmpl.Name, err)
+		if rollbackErr := c.rollbackCreatedService(ctx, servicePath); rollbackErr != nil {
+			return errors.Join(primaryErr, fmt.Errorf("failed to fully roll back service creation: %w", rollbackErr))
+		}
+		return fmt.Errorf("%w; removed the new service file so creation can be retried", primaryErr)
 	}
 
-	return c.ReloadDaemon(ctx)
+	return nil
+}
+
+func writeServiceFile(path, content string) (err error) {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("failed to close service file: %w", closeErr))
+		}
+		if err == nil {
+			return
+		}
+		if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, fs.ErrNotExist) {
+			err = errors.Join(err, fmt.Errorf("failed to remove incomplete service file: %w", removeErr))
+		}
+	}()
+
+	if _, err = file.WriteString(content); err != nil {
+		return fmt.Errorf("failed to write service file: %w", err)
+	}
+	if err = file.Sync(); err != nil {
+		return fmt.Errorf("failed to sync service file: %w", err)
+	}
+
+	return nil
+}
+
+func (c *systemdClient) rollbackCreatedService(ctx context.Context, servicePath string) error {
+	var rollbackErrs []error
+
+	if err := os.Remove(servicePath); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		rollbackErrs = append(rollbackErrs, fmt.Errorf("failed to remove service file: %w", err))
+	}
+
+	if err := c.ReloadDaemon(context.WithoutCancel(ctx)); err != nil {
+		rollbackErrs = append(rollbackErrs, fmt.Errorf("failed to reload daemon after rollback: %w", err))
+	}
+
+	return errors.Join(rollbackErrs...)
 }
 
 func (c *systemdClient) generateServiceFile(tmpl client.ServiceTemplate) string {
