@@ -1,0 +1,25 @@
+name: Agent inspect reliability scope
+
+on:
+  push:
+    branches:
+      - agent/fix-service-discovery-follow-refresh-layout
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Repository paths and symbols
+        run: |
+          echo '=== service files ==='
+          find internal/service -maxdepth 1 -type f -print | sort
+          echo '=== Unit definitions ==='
+          grep -R -n -E '^type (Unit|UnitFile) struct' internal/service || true
+          echo '=== MainModel and layout symbols ==='
+          grep -R -n -E '^type MainModel struct|func \(m \*?MainModel\) recalcPanelSizes|func NewMainModel|fetchServices|followPending|followSessionID' internal/ui/model.go internal/ui/commands.go | head -200
+          echo '=== Service mock FollowLogs implementations ==='
+          grep -R -n 'FollowLogs(ctx' internal --include='*.go'
