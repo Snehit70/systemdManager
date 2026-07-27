@@ -12,12 +12,11 @@ import (
 
 // Message types for the Update loop.
 
-type errMsg struct {
-	op  string
-	err error
+type serviceListMsg struct {
+	id       uint64
+	services []client.Service
+	err      error
 }
-
-func (e errMsg) Error() string { return e.err.Error() }
 
 type actionResultMsg struct {
 	message string
@@ -58,13 +57,25 @@ type logLineMsg struct {
 type followStartedMsg struct {
 	id     uint64
 	unit   string
-	ch     <-chan string
+	ch     <-chan client.LogEvent
 	cancel context.CancelFunc
 }
 
 type followStoppedMsg struct {
 	id   uint64
 	unit string
+}
+
+type followStartFailedMsg struct {
+	id   uint64
+	unit string
+	err  error
+}
+
+type followStreamFailedMsg struct {
+	id   uint64
+	unit string
+	err  error
 }
 
 type tickMsg time.Time
@@ -81,12 +92,11 @@ func (m MainModel) tick() tea.Cmd {
 	})
 }
 
-func (m MainModel) fetchServices() tea.Msg {
-	services, err := m.client.ListServices(m.ctx)
-	if err != nil {
-		return errMsg{op: "Failed to list services", err: err}
+func (m MainModel) fetchServices(id uint64) tea.Cmd {
+	return func() tea.Msg {
+		services, err := m.client.ListServices(m.ctx)
+		return serviceListMsg{id: id, services: services, err: err}
 	}
-	return services
 }
 
 func (m MainModel) fetchDetailContent(unit string) tea.Cmd {
@@ -208,7 +218,7 @@ func (m MainModel) startFollow(unit string, id uint64) tea.Cmd {
 
 		logChan, cancel, err := m.client.FollowLogs(m.ctx, unit, client.LogOptions{Lines: lines})
 		if err != nil {
-			return errMsg{op: "Failed to follow logs", err: err}
+			return followStartFailedMsg{id: id, unit: unit, err: err}
 		}
 
 		return followStartedMsg{id: id, unit: unit, ch: logChan, cancel: cancel}
@@ -236,11 +246,14 @@ func (m MainModel) continueFollow(unit string, id uint64) tea.Cmd {
 
 	return func() tea.Msg {
 		select {
-		case line, ok := <-ch:
+		case event, ok := <-ch:
 			if !ok {
 				return followStoppedMsg{id: id, unit: unit}
 			}
-			return logLineMsg{id: id, line: line}
+			if event.Err != nil {
+				return followStreamFailedMsg{id: id, unit: unit, err: event.Err}
+			}
+			return logLineMsg{id: id, line: event.Line}
 		case <-ctx.Done():
 			return followStoppedMsg{id: id, unit: unit}
 		}

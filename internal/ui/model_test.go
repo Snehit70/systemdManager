@@ -48,9 +48,9 @@ func (m *mockServiceClient) EditService(ctx context.Context, name string) (*exec
 	return cmd, nil
 }
 func (m *mockServiceClient) ReloadDaemon(ctx context.Context) error { return nil }
-func (m *mockServiceClient) FollowLogs(ctx context.Context, name string, opts client.LogOptions) (<-chan string, context.CancelFunc, error) {
+func (m *mockServiceClient) FollowLogs(ctx context.Context, name string, opts client.LogOptions) (<-chan client.LogEvent, context.CancelFunc, error) {
 	m.followOpts = opts
-	ch := make(chan string)
+	ch := make(chan client.LogEvent)
 	cancel := func() { close(ch) }
 	return ch, cancel, nil
 }
@@ -132,21 +132,6 @@ func TestConfirmationCancelOnEscape(t *testing.T) {
 	}
 	if m.statusMessage != "Cancelled" {
 		t.Errorf("Expected statusMessage 'Cancelled', got '%s'", m.statusMessage)
-	}
-}
-
-func TestErrorMessageHandling(t *testing.T) {
-	model := newTestModel()
-
-	testErr := errors.New("test error")
-	errMsg := errMsg{op: "Test", err: testErr}
-
-	updatedModel, _ := model.Update(errMsg)
-	m := updatedModel.(MainModel)
-
-	expected := "Error: Test - test error"
-	if m.statusMessage != expected {
-		t.Errorf("Expected '%s', got '%s'", expected, m.statusMessage)
 	}
 }
 

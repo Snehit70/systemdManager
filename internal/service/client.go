@@ -2,6 +2,7 @@ package service
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"systemd-tui/internal/client"
@@ -41,20 +43,12 @@ func (c *systemdClient) ListServices(ctx context.Context) ([]client.Service, err
 		return nil, err
 	}
 
-	unitFileStates := make(map[string]string)
 	unitFiles, err := c.listUnitFiles(ctx)
-	if err == nil {
-		for _, uf := range unitFiles {
-			unitFileStates[uf.UnitFile] = uf.State
-		}
+	if err != nil {
+		return nil, err
 	}
 
-	services := make([]client.Service, len(units))
-	for i, u := range units {
-		services[i] = c.unitToService(u, unitFileStates[u.Unit])
-	}
-
-	return services, nil
+	return c.mergeServices(units, unitFiles), nil
 }
 
 func (c *systemdClient) listUnits(ctx context.Context) ([]Unit, error) {
@@ -85,6 +79,52 @@ func (c *systemdClient) listUnitFiles(ctx context.Context) ([]UnitFile, error) {
 	}
 
 	return unitFiles, nil
+}
+
+func (c *systemdClient) mergeServices(units []Unit, unitFiles []UnitFile) []client.Service {
+	unitFileStates := make(map[string]string, len(unitFiles))
+	for _, unitFile := range unitFiles {
+		unitFileStates[unitFile.UnitFile] = unitFile.State
+	}
+
+	servicesByName := make(map[string]client.Service, len(units)+len(unitFiles))
+	for _, unit := range units {
+		servicesByName[unit.Unit] = c.unitToService(unit, unitFileStates[unit.Unit])
+	}
+
+	for _, unitFile := range unitFiles {
+		if !strings.HasSuffix(unitFile.UnitFile, ".service") || isTemplateUnitFile(unitFile.UnitFile) {
+			continue
+		}
+		if _, loaded := servicesByName[unitFile.UnitFile]; loaded {
+			continue
+		}
+
+		servicesByName[unitFile.UnitFile] = client.Service{
+			Name:    unitFile.UnitFile,
+			Status:  client.StatusInactive,
+			Sub:     "dead",
+			Enabled: isUnitFileEnabled(unitFile.State),
+			Load:    "unloaded",
+			Source:  c.determineSource(unitFile.UnitFile, unitFile.State),
+		}
+	}
+
+	names := make([]string, 0, len(servicesByName))
+	for name := range servicesByName {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	services := make([]client.Service, 0, len(names))
+	for _, name := range names {
+		services = append(services, servicesByName[name])
+	}
+	return services
+}
+
+func isTemplateUnitFile(name string) bool {
+	return strings.HasSuffix(name, "@.service")
 }
 
 func (c *systemdClient) StartService(ctx context.Context, name string) error {
@@ -138,7 +178,7 @@ func (c *systemdClient) GetLogs(ctx context.Context, name string, opts client.Lo
 	return string(output), nil
 }
 
-func (c *systemdClient) FollowLogs(ctx context.Context, name string, opts client.LogOptions) (<-chan string, context.CancelFunc, error) {
+func (c *systemdClient) FollowLogs(ctx context.Context, name string, opts client.LogOptions) (<-chan client.LogEvent, context.CancelFunc, error) {
 	lines := opts.Lines
 	if lines <= 0 {
 		lines = 50
@@ -152,26 +192,54 @@ func (c *systemdClient) FollowLogs(ctx context.Context, name string, opts client
 		cancel()
 		return nil, nil, fmt.Errorf("failed to create pipe for %s: %w", name, err)
 	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 
 	if err := cmd.Start(); err != nil {
 		cancel()
 		return nil, nil, fmt.Errorf("failed to start journalctl for %s: %w", name, err)
 	}
 
-	logChan := make(chan string, 100)
+	logChan := make(chan client.LogEvent, 100)
 
 	go func() {
 		defer close(logChan)
-		defer cmd.Wait()
+
+		send := func(event client.LogEvent) bool {
+			select {
+			case logChan <- event:
+				return true
+			case <-ctx.Done():
+				return false
+			}
+		}
 
 		scanner := bufio.NewScanner(stdout)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		for scanner.Scan() {
-			select {
-			case logChan <- scanner.Text():
-			case <-ctx.Done():
+			if !send(client.LogEvent{Line: scanner.Text()}) {
 				return
 			}
+		}
+
+		scanErr := scanner.Err()
+		if scanErr != nil && cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		waitErr := cmd.Wait()
+		if ctx.Err() != nil {
+			return
+		}
+
+		var streamErrs []error
+		if scanErr != nil {
+			streamErrs = append(streamErrs, fmt.Errorf("failed to read journalctl output for %s: %w", name, scanErr))
+		}
+		if waitErr != nil {
+			streamErrs = append(streamErrs, commandError(fmt.Sprintf("journalctl follow failed for %s", name), waitErr, stderr.Bytes()))
+		}
+		if streamErr := errors.Join(streamErrs...); streamErr != nil {
+			send(client.LogEvent{Err: streamErr})
 		}
 	}()
 
@@ -271,9 +339,9 @@ func (c *systemdClient) determineSource(unitName, state string) client.ServiceSo
 		return client.SourceGenerated
 	case "transient":
 		return client.SourceTransient
-	case "static", "alias":
+	case "static", "alias", "indirect":
 		return client.SourceStatic
-	case "enabled", "disabled":
+	case "enabled", "enabled-runtime", "disabled", "disabled-runtime", "linked", "linked-runtime", "masked", "masked-runtime":
 		return client.SourceSystem
 	default:
 		return client.SourceUnknown

@@ -289,6 +289,9 @@ type MainModel struct {
 	activeView    int
 	ctx           context.Context
 
+	refreshRequestID uint64
+	refreshPending   bool
+
 	confirmingAction string
 	confirmingUnit   string
 
@@ -296,7 +299,7 @@ type MainModel struct {
 	followPending   bool
 	followSessionID uint64
 	followCancel    context.CancelFunc
-	followLogChan   <-chan string
+	followLogChan   <-chan client.LogEvent
 	followLogLines  []string
 	followTrimmed   bool
 
@@ -357,29 +360,42 @@ func NewMainModel(client client.ServiceClient, cfg *config.Config) MainModel {
 		MarginRight(1)
 
 	return MainModel{
-		list:           l,
-		viewport:       vp,
-		help:           help.New(),
-		client:         client,
-		config:         cfg,
-		theme:          theme,
-		activeView:     listView,
-		activeBorder:   active,
-		inactiveBorder: inactive,
-		detailStyle:    lipgloss.NewStyle().PaddingLeft(1),
-		ctx:            context.Background(),
-		splitRatio:     0.33,
+		list:             l,
+		viewport:         vp,
+		help:             help.New(),
+		client:           client,
+		config:           cfg,
+		theme:            theme,
+		activeView:       listView,
+		activeBorder:     active,
+		inactiveBorder:   inactive,
+		detailStyle:      lipgloss.NewStyle().PaddingLeft(1),
+		ctx:              context.Background(),
+		refreshRequestID: 1,
+		refreshPending:   true,
+		splitRatio:       0.33,
 	}
 }
 
 func (m MainModel) Init() tea.Cmd {
-	return tea.Batch(m.fetchServices, m.tick())
+	return tea.Batch(m.fetchServices(m.refreshRequestID), m.tick())
 }
 
 func (m *MainModel) recalcPanelSizes() {
-	helpHeight := 2
+	m.help.Width = m.width
+	helpHeight := lipgloss.Height(m.renderHelpView(m.width))
+	if helpHeight < 1 {
+		helpHeight = 1
+	}
+	filterBarHeight := 0
+	if m.list.FilterState() == list.Filtering {
+		filterBarHeight = 1
+	}
 	statusBarHeight := 1
-	mainHeight := m.height - helpHeight - statusBarHeight
+	mainHeight := m.height - helpHeight - filterBarHeight - statusBarHeight
+	if mainHeight < 3 {
+		mainHeight = 3
+	}
 
 	listWidth := int(float64(m.width) * m.splitRatio)
 	if listWidth < 20 {
@@ -393,7 +409,6 @@ func (m *MainModel) recalcPanelSizes() {
 	m.list.SetSize(listWidth-2, mainHeight-2)
 	m.viewport.Width = detailWidth - 2
 	m.viewport.Height = mainHeight - 2
-	m.help.Width = m.width
 }
 
 func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -472,7 +487,11 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		if m.list.FilterState() == list.Filtering {
+			filterWasVisible := true
 			m.list, cmd = m.list.Update(msg)
+			if filterWasVisible != (m.list.FilterState() == list.Filtering) {
+				m.recalcPanelSizes()
+			}
 			return m, cmd
 		}
 
@@ -526,6 +545,7 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case key.Matches(msg, keys.Help):
 			m.help.ShowAll = !m.help.ShowAll
+			m.recalcPanelSizes()
 			return m, nil
 		case key.Matches(msg, keys.ToggleDetail):
 			m.detailViewMode = m.detailViewMode.Next()
@@ -638,7 +658,11 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					prevItem = m.list.SelectedItem()
 				}
 
+				filterWasVisible := m.list.FilterState() == list.Filtering
 				m.list, cmd = m.list.Update(msg)
+				if filterWasVisible != (m.list.FilterState() == list.Filtering) {
+					m.recalcPanelSizes()
+				}
 				cmds = append(cmds, cmd)
 
 				if svc := m.getSelectedService(); svc != nil {
@@ -661,34 +685,27 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, cmd)
 		}
 
+	case serviceListMsg:
+		if msg.id != m.refreshRequestID {
+			break
+		}
+		m.refreshPending = false
+		if msg.err != nil {
+			m.statusMessage = "Failed to list services: " + renderUserError(msg.err)
+			break
+		}
+		cmds = append(cmds, m.applyServiceList(msg.services))
+
 	case []client.Service:
-		m.services = msg
-		userCount := 0
-		for _, svc := range m.services {
-			if svc.Source == client.SourceUser {
-				userCount++
-			}
-		}
-		m.statusMessage = fmt.Sprintf("Loaded %d services (%d user-created)", len(msg), userCount)
-
-		filtered := m.filteredServices()
-		filteredCount := len(filtered)
-		totalCount := len(m.services)
-		if filteredCount != totalCount {
-			m.list.Title = fmt.Sprintf("User Services (%d/%d)", filteredCount, totalCount)
-		} else {
-			m.list.Title = fmt.Sprintf("User Services (%d)", totalCount)
-		}
-
-		items := m.buildListItems()
-		cmds = append(cmds, m.replaceListItems(items, true))
+		// Kept for direct model tests and callers that already have a complete list.
+		cmds = append(cmds, m.applyServiceList(msg))
 
 	case actionResultMsg:
 		m.statusMessage = msg.message
 		if msg.err != nil {
 			m.statusMessage = "Error: " + renderUserError(msg.err)
 		} else {
-			cmds = append(cmds, m.fetchServices)
+			cmds = append(cmds, m.requestServices(true))
 		}
 
 	case createServiceResultMsg:
@@ -699,7 +716,7 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.showCreate = false
 			m.statusMessage = fmt.Sprintf("Created service: %s", msg.name)
-			cmds = append(cmds, m.fetchServices)
+			cmds = append(cmds, m.requestServices(true))
 		}
 
 	case editorFinishedMsg:
@@ -716,7 +733,7 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusMessage = "Edit saved, but reload failed: " + msg.err.Error()
 		} else {
 			m.statusMessage = "Edit saved. Reloaded daemon."
-			cmds = append(cmds, m.fetchServices)
+			cmds = append(cmds, m.requestServices(true))
 		}
 
 	case logMsg:
@@ -802,12 +819,12 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case followStartedMsg:
-		m.followPending = false
 		if msg.id != m.followSessionID {
 			// Stale session (selection changed while follow was starting); cancel stream.
 			msg.cancel()
 			break
 		}
+		m.followPending = false
 		m.following = true
 		m.followCancel = msg.cancel
 		m.followLogChan = msg.ch
@@ -815,6 +832,22 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.followTrimmed = false
 		m.selectedSvc = msg.unit
 		cmds = append(cmds, m.continueFollow(msg.unit, msg.id))
+
+	case followStartFailedMsg:
+		if msg.id != m.followSessionID {
+			break
+		}
+		m.followPending = false
+		m.statusMessage = fmt.Sprintf("Failed to follow logs for %s: %s", msg.unit, renderUserError(msg.err))
+
+	case followStreamFailedMsg:
+		if m.following && msg.id == m.followSessionID && msg.unit == m.selectedSvc {
+			m.stopFollow()
+			m.statusMessage = fmt.Sprintf("Log follow failed for %s: %s", msg.unit, renderUserError(msg.err))
+			if m.selectedSvc != "" {
+				cmds = append(cmds, m.fetchDetailContent(m.selectedSvc))
+			}
+		}
 
 	case followStoppedMsg:
 		if m.following && msg.id == m.followSessionID && msg.unit == m.selectedSvc {
@@ -825,20 +858,47 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-	case errMsg:
-		m.followPending = false
-		m.statusMessage = fmt.Sprintf("Error: %s - %s", msg.op, renderUserError(msg.err))
-
 	case tickMsg:
 		// Don't refresh while a filter is active or being entered — it would
 		// reset either the in-progress filter input or the applied filter result.
 		if m.list.FilterState() != list.Unfiltered {
 			return m, m.tick()
 		}
-		return m, tea.Batch(m.fetchServices, m.tick())
+		return m, tea.Batch(m.requestServices(false), m.tick())
 	}
 
 	return m, tea.Batch(cmds...)
+}
+
+func (m *MainModel) requestServices(force bool) tea.Cmd {
+	if m.refreshPending && !force {
+		return nil
+	}
+	m.refreshRequestID++
+	m.refreshPending = true
+	return m.fetchServices(m.refreshRequestID)
+}
+
+func (m *MainModel) applyServiceList(services []client.Service) tea.Cmd {
+	m.services = services
+	userCount := 0
+	for _, svc := range m.services {
+		if svc.Source == client.SourceUser {
+			userCount++
+		}
+	}
+	m.statusMessage = fmt.Sprintf("Loaded %d services (%d user-created)", len(services), userCount)
+
+	filtered := m.filteredServices()
+	filteredCount := len(filtered)
+	totalCount := len(m.services)
+	if filteredCount != totalCount {
+		m.list.Title = fmt.Sprintf("User Services (%d/%d)", filteredCount, totalCount)
+	} else {
+		m.list.Title = fmt.Sprintf("User Services (%d)", totalCount)
+	}
+
+	return m.replaceListItems(m.buildListItems(), true)
 }
 
 func (m *MainModel) replaceListItems(items []list.Item, refreshDetail bool) tea.Cmd {
