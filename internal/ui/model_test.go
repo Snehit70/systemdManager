@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"os/exec"
+	"strings"
+	"testing"
+
 	"systemd-tui/internal/client"
 	"systemd-tui/internal/config"
-	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -59,6 +61,24 @@ func (m *mockServiceClient) CreateService(ctx context.Context, tmpl client.Servi
 
 func newTestModel() MainModel {
 	return NewMainModel(&mockServiceClient{}, config.Default())
+}
+
+func applyServices(t *testing.T, model MainModel, services []client.Service) MainModel {
+	t.Helper()
+	updated, _ := model.Update(services)
+	return updated.(MainModel)
+}
+
+func selectedServiceName(t *testing.T, model MainModel) string {
+	t.Helper()
+	service := model.getSelectedService()
+	if service == nil {
+		t.Fatal("expected a service to be selected")
+	}
+	if service.Name != model.selectedSvc {
+		t.Fatalf("visible selection %q does not match selectedSvc %q", service.Name, model.selectedSvc)
+	}
+	return service.Name
 }
 
 func TestMainModelInit(t *testing.T) {
@@ -289,5 +309,132 @@ func TestStartFollowUsesConfiguredLogLines(t *testing.T) {
 	}
 	if mockClient.followOpts.Lines != 123 {
 		t.Fatalf("expected configured log lines 123, got %d", mockClient.followOpts.Lines)
+	}
+}
+
+func TestGroupingPreservesSelectedService(t *testing.T) {
+	model := newTestModel()
+	model = applyServices(t, model, []client.Service{
+		{Name: "active.service", Status: client.StatusActive, Source: client.SourceUser},
+		{Name: "inactive.service", Status: client.StatusInactive, Source: client.SourceUser},
+		{Name: "failed.service", Status: client.StatusFailed, Source: client.SourceUser},
+	})
+
+	model.list.Select(1)
+	model.selectedSvc = "inactive.service"
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")})
+	model = updated.(MainModel)
+
+	if got := selectedServiceName(t, model); got != "inactive.service" {
+		t.Fatalf("selected service after grouping = %q, want inactive.service", got)
+	}
+	if _, ok := model.list.SelectedItem().(groupHeaderItem); ok {
+		t.Fatal("group header became the effective selection")
+	}
+}
+
+func TestSourceFilterFallsBackAndStopsFollow(t *testing.T) {
+	model := newTestModel()
+	model = applyServices(t, model, []client.Service{
+		{Name: "system.service", Status: client.StatusActive, Source: client.SourceSystem},
+		{Name: "user.service", Status: client.StatusActive, Source: client.SourceUser},
+	})
+
+	cancelled := false
+	model.following = true
+	model.followCancel = func() { cancelled = true }
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("F")})
+	model = updated.(MainModel)
+
+	if got := selectedServiceName(t, model); got != "user.service" {
+		t.Fatalf("selected service after source filter = %q, want user.service", got)
+	}
+	if model.following {
+		t.Fatal("follow mode remained active after the selected service changed")
+	}
+	if !cancelled {
+		t.Fatal("active follow session was not cancelled")
+	}
+}
+
+func TestSourceFilterInvalidatesPendingFollow(t *testing.T) {
+	model := newTestModel()
+	model = applyServices(t, model, []client.Service{
+		{Name: "system.service", Status: client.StatusActive, Source: client.SourceSystem},
+		{Name: "user.service", Status: client.StatusActive, Source: client.SourceUser},
+	})
+
+	model.followPending = true
+	model.followSessionID = 7
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("F")})
+	model = updated.(MainModel)
+
+	if model.followPending {
+		t.Fatal("pending follow remained active after the selected service changed")
+	}
+	if model.followSessionID != 8 {
+		t.Fatalf("follow session ID = %d, want 8", model.followSessionID)
+	}
+}
+
+func TestRefreshPreservesSelectionWhenOrderChanges(t *testing.T) {
+	model := newTestModel()
+	model = applyServices(t, model, []client.Service{
+		{Name: "alpha.service", Status: client.StatusActive, Source: client.SourceUser},
+		{Name: "beta.service", Status: client.StatusInactive, Source: client.SourceUser},
+	})
+
+	model.list.Select(1)
+	model.selectedSvc = "beta.service"
+	model = applyServices(t, model, []client.Service{
+		{Name: "beta.service", Status: client.StatusActive, Source: client.SourceUser},
+		{Name: "alpha.service", Status: client.StatusInactive, Source: client.SourceUser},
+	})
+
+	if got := selectedServiceName(t, model); got != "beta.service" {
+		t.Fatalf("selected service after refresh = %q, want beta.service", got)
+	}
+	if model.list.Index() != 0 {
+		t.Fatalf("selected index after reorder = %d, want 0", model.list.Index())
+	}
+}
+
+func TestEmptyRefreshClearsSelectionAndDetail(t *testing.T) {
+	model := newTestModel()
+	model = applyServices(t, model, []client.Service{
+		{Name: "demo.service", Status: client.StatusActive, Source: client.SourceUser},
+	})
+	model.viewport.Width = 40
+	model.viewport.Height = 5
+	model.viewport.SetContent("stale detail")
+	if !strings.Contains(model.viewport.View(), "stale detail") {
+		t.Fatal("test setup did not render stale detail content")
+	}
+
+	model = applyServices(t, model, nil)
+
+	if model.selectedSvc != "" {
+		t.Fatalf("selectedSvc after empty refresh = %q, want empty", model.selectedSvc)
+	}
+	if model.getSelectedService() != nil {
+		t.Fatal("a service remained selected after the list became empty")
+	}
+	if strings.Contains(model.viewport.View(), "stale detail") {
+		t.Fatal("stale detail content remained after the list became empty")
+	}
+}
+
+func TestInitialGroupedListSkipsHeader(t *testing.T) {
+	model := newTestModel()
+	model.groupMode = groupByStatus
+	model = applyServices(t, model, []client.Service{
+		{Name: "demo.service", Status: client.StatusActive, Source: client.SourceUser},
+	})
+
+	if got := selectedServiceName(t, model); got != "demo.service" {
+		t.Fatalf("selected service = %q, want demo.service", got)
+	}
+	if model.list.Index() != 1 {
+		t.Fatalf("selected index = %d, want 1 after the group header", model.list.Index())
 	}
 }
