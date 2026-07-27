@@ -1,9 +1,9 @@
 ?   	systemd-tui/cmd/systemd-tui	[no test files]
-ok  	systemd-tui/internal/client	0.002s
+ok  	systemd-tui/internal/client	0.007s
 ?   	systemd-tui/internal/config	[no test files]
-ok  	systemd-tui/internal/service	1.044s
+ok  	systemd-tui/internal/service	0.057s
 --- FAIL: TestFilteringReservesAndReleasesTerminalRow (0.00s)
-    reliability_test.go:181: filter UI renders 31 rows into a 30-row terminal
+    reliability_test.go:181: filter UI renders 31 rows into a 30-row terminal (list=24 viewport=24 filter=1 status=1 help=3)
 FAIL
 FAIL	systemd-tui/internal/ui	0.011s
 FAIL
