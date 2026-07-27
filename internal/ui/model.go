@@ -26,6 +26,12 @@ func (i item) Title() string       { return i.svc.Name }
 func (i item) Description() string { return i.svc.Description }
 func (i item) FilterValue() string { return i.svc.Name }
 
+type listItemsRebuiltMsg struct {
+	matches       list.FilterMatchesMsg
+	preferred     string
+	refreshDetail bool
+}
+
 func (m MainModel) getSelectedService() *client.Service {
 	selected := m.list.SelectedItem()
 	if selected == nil {
@@ -401,8 +407,23 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.recalcPanelSizes()
 
 	case list.FilterMatchesMsg:
+		preferred := m.selectedSvc
 		m.list, cmd = m.list.Update(msg)
-		return m, cmd
+		selectionChanged := m.reconcileListSelection(preferred)
+		cmds = append(cmds, cmd)
+		if selectionChanged && m.selectedSvc != "" {
+			cmds = append(cmds, m.fetchDetailContent(m.selectedSvc))
+		}
+		return m, tea.Batch(cmds...)
+
+	case listItemsRebuiltMsg:
+		m.list, cmd = m.list.Update(msg.matches)
+		selectionChanged := m.reconcileListSelection(msg.preferred)
+		cmds = append(cmds, cmd)
+		if (selectionChanged || msg.refreshDetail) && m.selectedSvc != "" {
+			cmds = append(cmds, m.fetchDetailContent(m.selectedSvc))
+		}
+		return m, tea.Batch(cmds...)
 
 	case tea.MouseMsg:
 		// Determine which pane the mouse is over and route the event.
@@ -540,13 +561,15 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.groupMode = m.groupMode.Next()
 			m.statusMessage = fmt.Sprintf("Group by: %s", m.groupMode)
 			m.updateListTitle()
-			cmds = append(cmds, m.list.SetItems(m.buildListItems()))
+			cmds = append(cmds, m.replaceListItems(m.buildListItems(), false))
+			return m, tea.Batch(cmds...)
 
 		case key.Matches(msg, keys.ToggleSource):
 			m.filterMode = m.filterMode.Next()
 			m.statusMessage = fmt.Sprintf("Filter: %s", m.filterMode)
 			m.updateListTitle()
-			cmds = append(cmds, m.list.SetItems(m.buildListItems()))
+			cmds = append(cmds, m.replaceListItems(m.buildListItems(), false))
+			return m, tea.Batch(cmds...)
 
 		case key.Matches(msg, keys.ShrinkPanel):
 			m.splitRatio -= 0.05
@@ -658,22 +681,7 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		items := m.buildListItems()
-		cmds = append(cmds, m.list.SetItems(items))
-
-		if m.selectedSvc == "" && len(items) > 0 {
-			for i, it := range items {
-				if _, ok := it.(item); ok {
-					m.list.Select(i)
-					m.selectedSvc = it.FilterValue()
-					break
-				}
-			}
-		}
-
-		if svc := m.getSelectedService(); svc != nil {
-			m.selectedSvc = svc.Name
-			cmds = append(cmds, m.fetchDetailContent(svc.Name))
-		}
+		cmds = append(cmds, m.replaceListItems(items, true))
 
 	case actionResultMsg:
 		m.statusMessage = msg.message
@@ -831,6 +839,82 @@ func (m MainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, tea.Batch(cmds...)
+}
+
+func (m *MainModel) replaceListItems(items []list.Item, refreshDetail bool) tea.Cmd {
+	preferred := m.selectedSvc
+	filterCmd := m.list.SetItems(items)
+	if filterCmd != nil {
+		return func() tea.Msg {
+			msg := filterCmd()
+			matches, ok := msg.(list.FilterMatchesMsg)
+			if !ok {
+				return msg
+			}
+			return listItemsRebuiltMsg{
+				matches:       matches,
+				preferred:     preferred,
+				refreshDetail: refreshDetail,
+			}
+		}
+	}
+
+	selectionChanged := m.reconcileListSelection(preferred)
+	if (selectionChanged || refreshDetail) && m.selectedSvc != "" {
+		return m.fetchDetailContent(m.selectedSvc)
+	}
+	return nil
+}
+
+func (m *MainModel) reconcileListSelection(preferred string) bool {
+	previous := m.selectedSvc
+	selectedIndex := -1
+	selectedName := ""
+	visibleItems := m.list.VisibleItems()
+
+	if preferred != "" {
+		for i, listItem := range visibleItems {
+			serviceItem, ok := listItem.(item)
+			if ok && serviceItem.svc.Name == preferred {
+				selectedIndex = i
+				selectedName = serviceItem.svc.Name
+				break
+			}
+		}
+	}
+
+	if selectedIndex < 0 {
+		for i, listItem := range visibleItems {
+			serviceItem, ok := listItem.(item)
+			if ok {
+				selectedIndex = i
+				selectedName = serviceItem.svc.Name
+				break
+			}
+		}
+	}
+
+	if selectedIndex >= 0 {
+		m.list.Select(selectedIndex)
+		m.selectedSvc = selectedName
+	} else {
+		m.list.ResetSelected()
+		m.selectedSvc = ""
+		m.viewport.SetContent("")
+		m.viewport.GotoTop()
+	}
+
+	if previous == m.selectedSvc {
+		return false
+	}
+
+	if m.following {
+		m.stopFollow()
+	} else if m.followPending {
+		m.followSessionID++
+		m.followPending = false
+	}
+	return true
 }
 
 func (m MainModel) buildListItems() []list.Item {
